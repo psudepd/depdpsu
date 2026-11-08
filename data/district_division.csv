@@ -1,0 +1,31 @@
+district_code,district_name,division_code
+karachi_central,Karachi Central,karachi
+karachi_east,Karachi East,karachi
+karachi_south,Karachi South,karachi
+karachi_west,Karachi West,karachi
+korangi,Korangi,karachi
+malir,Malir,karachi
+keamari,Keamari,karachi
+hyderabad,Hyderabad,hyderabad
+badin,Badin,hyderabad
+dadu,Dadu,hyderabad
+jamshoro,Jamshoro,hyderabad
+matiari,Matiari,hyderabad
+tando_allahyar,Tando Allahyar,hyderabad
+tando_muhammad_khan,Tando Muhammad Khan,hyderabad
+thatta,Thatta,hyderabad
+sujawal,Sujawal,hyderabad
+shaheed_benazirabad,Shaheed Benazirabad,shaheed_benazirabad
+sanghar,Sanghar,shaheed_benazirabad
+naushahro_feroze,Naushahro Feroze,shaheed_benazirabad
+mirpurkhas,Mirpurkhas,mirpurkhas
+umerkot,Umerkot,mirpurkhas
+tharparkar,Tharparkar,mirpurkhas
+sukkur,Sukkur,sukkur
+khairpur,Khairpur,sukkur
+ghotki,Ghotki,sukkur
+larkana,Larkana,larkana
+kamber_shahdadkot,Kamber Shahdadkot,larkana
+jacobabad,Jacobabad,larkana
+kashmore,Kashmore,larkana
+shikarpur,Shikarpur,larkana

@@ -1,0 +1,20 @@
+facility_type,label,service_category,sections_shown,has_section_w,new_waiting_source,counts_as_service
+rcmhc,RCMHC,rehabilitation_education,"C,R,W",yes,c_new / c_waiting,yes
+rcph,RCPH,rehabilitation,"C,R,W",yes,c_new / c_waiting,yes
+gov_se,Government Special Education Centre / Complex,education,"C,M,R,W",yes,c_new / c_waiting,yes
+inclusive,Inclusive Education,education,"N,R,W",yes,n_new / n_waiting,yes
+deaf_reach,Deaf Reach Program,education,"T,R,W",yes,w_new / w_waiting,yes
+sipmr,SIPMR,health_rehabilitation_devices,"L,U,R,W",yes,w_new / w_waiting,yes
+ipmr,Institute of Physical Medicine and Rehabilitation,health_rehabilitation,"L,R,W",yes,w_new / w_waiting,yes
+carts,C-ARTS,multi_service,"V1-V5 as selected,Q if partner support,R,W",yes,w_new / w_waiting,yes
+nowpdp,NOWPDP,multi_service,"P0-P5 as selected,R,W",yes,w_new / w_waiting,yes
+hostel,Govt SE & Rehab Hostel,residential,"I,R,W",yes,w_new / w_waiting,yes
+vtc,Govt VTC / VR&E / Voc. Trg. & Rehab Centre,vocational,"K,R,W",yes,w_new / w_waiting,yes
+academy,Special Education Teachers Training Academy,teacher_training,"H,R,W",yes,w_new / w_waiting,yes
+gia,Grant-in-Aid (GIA) organisation,grant_in_aid_multi_service,"C,H,I,K,L,M,N,R,W",yes,c_new / c_waiting or n_new / n_waiting,yes
+sindh_persons_with_disabilitie,Sindh Persons with Disabilities Protection Authority (SPDPA),registration_certification,"G1 (+ Disability Certificate group if ticked),R,W (W currently shown: open decision)",yes_pending,none,yes
+dis_cer,Issuing District (Disability Certificate),registration_certification,"Disability Certificate group,R,W (W currently shown: open decision)",yes_pending,none,yes
+legal_support__beneficiaries,Access to Justice for Persons with Disabilities (Legal Support),legal_support,"Legal Support group,R,W (W currently shown: open decision)",yes_pending,none,yes
+pcrdp,"PCRDP (legacy; shows Section C, no G1: open decision)",registration_complaints,"C,R",no,c_new / c_waiting,yes
+assistive_ip,Assistive Device Implementing Partner,assistive_devices,R,no,none,yes
+regional_dir,Regional Directorate (administrative),administrative,"A,B only",no,none,no (office information only)

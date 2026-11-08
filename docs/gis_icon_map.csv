@@ -1,0 +1,20 @@
+facility_type,ownership_class,icon_group,marker_shape,icon_description,suggested_icon_name,colour_hex,counts_as_service,class_status
+rcmhc,government,Health / rehabilitation,circle,medical cross,hospital,#2E7D32,True,confirmed by DEPD
+rcph,government,Health / rehabilitation,circle,medical cross,hospital,#2E7D32,True,confirmed by DEPD
+sipmr,other,Health / rehabilitation,circle,medical cross,hospital,#7B3FA0,True,proposed (confirm)
+ipmr,other,Health / rehabilitation,circle,medical cross,hospital,#7B3FA0,True,proposed (confirm)
+gov_se,government,Education / school,rounded square,school building,school,#2E7D32,True,confirmed by DEPD
+inclusive,government,Education / school,rounded square,book,book-open,#2E7D32,True,confirmed by DEPD
+deaf_reach,partner,Education / school,rounded square,school building + hearing symbol,school,#1F5FBF,True,confirmed by DEPD
+gia,partner,Education / school,rounded square,book + hand,book-open,#1F5FBF,True,confirmed by DEPD
+carts,government,Training / vocational,hexagon,tools (wrench),wrench,#2E7D32,True,confirmed by DEPD
+vtc,government,Training / vocational,hexagon,tools (wrench),wrench,#2E7D32,True,confirmed by DEPD
+academy,other,Training / vocational,hexagon,graduation cap,graduation-cap,#7B3FA0,True,proposed (confirm)
+nowpdp,other,Training / vocational,hexagon,briefcase,briefcase,#7B3FA0,True,proposed (confirm)
+hostel,other,Hostel / residential,house (pentagon),bed,bed,#7B3FA0,True,proposed (confirm)
+assistive_ip,partner,Assistive devices,triangle,wheelchair,accessibility,#1F5FBF,True,confirmed by DEPD
+sindh_persons_with_disabilitie,government,Registration / legal,diamond,identity card,id-card,#2E7D32,True,confirmed by DEPD
+dis_cer,government,Registration / legal,diamond,identity card,id-card,#2E7D32,True,confirmed by DEPD
+legal_support__beneficiaries,other,Registration / legal,diamond,scales,scale,#7B3FA0,True,proposed (confirm)
+pcrdp,other,Registration / legal,diamond,identity card,id-card,#7B3FA0,True,proposed (confirm)
+regional_dir,government,Office (not a service),square with dashed outline,office building,building,#2E7D32,False,confirmed by DEPD

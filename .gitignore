@@ -1,0 +1,11 @@
+.env
+.cache/
+.secrets.toml
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.xlsx
+*.jpg
+!tests/expected_*.xlsx

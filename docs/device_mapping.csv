@@ -1,0 +1,9 @@
+canonical_device,section_r_fields,nowpdp_p5_fields,note
+wheelchair,r_wheelchair,p5_wheelchair,
+crutches_sticks_walkers,r_crutches+r_walker,p5_crutches,
+tricycle_motorised,,p5_tricycle,P5 only
+prosthetic_limb,r_limb,,R only
+orthosis,r_orthosis,,R only
+hearing_aid,r_hearing,p5_hearing,
+vision_aid,r_spectacles,p5_cane,"spectacles / low-vision aids / white canes"
+other,r_dev_other,p5_other,
