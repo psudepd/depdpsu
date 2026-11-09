@@ -1,4 +1,4 @@
-"""GIS map page (Phase 4).
+"""GIS map page.
 
 Map + four panels:
   (1) Headline: Direct, Estimated family, Estimated total
@@ -7,9 +7,9 @@ Map + four panels:
       source mix, latest 10 reports
   (4) Filters above the map: service type, ownership class, region, district
 
-When the boundary GeoJSON is missing, a clear message is shown and a
-district table + bar chart render instead of a map. The map pins every
-submitted coordinate regardless of bbox (see render_folium policy).
+Boundary policy (interim): district polygon layers are deferred until a
+licensed ADM2 file is available. Pins render on OpenStreetMap only.
+No polygon geometry, no bbox filtering, no district containment checks.
 """
 from __future__ import annotations
 
@@ -77,29 +77,12 @@ def _ownership_by_type() -> dict:
 
 
 def _render_map_or_fallback(df: pd.DataFrame):
-    boundaries, ok = load_boundaries()
-    if not ok:
-        st.components.v1.html(missing_boundaries_html(), height=70)
-        st.info(
-            "Fallback: district table (boundary file not yet supplied). "
-            "Pins on a real map require data/boundaries/sindh_districts.geojson."
-        )
-        dist = breakdown(df, "district")
-        if len(dist):
-            chart = dist.set_index("group")["direct"]
-            st.bar_chart(chart)
-            tbl = dist.rename(columns={
-                "group": "District",
-                "direct": "Direct",
-                "family_x5": "Estimated family (x5)",
-                "total_reach": "Estimated total reach",
-            })
-            table_with_downloads(tbl, "Direct by district", "map_district_table")
-        else:
-            st.info("No district data in the current selection.")
-        return
-
-    fmap = build_folium_map(df, boundaries)
+    # Boundary layers deferred. Pins on OpenStreetMap, no polygons.
+    st.info(
+        "Interactive map: facility pins on OpenStreetMap. "
+        "District-level boundary shading is not enabled yet."
+    )
+    fmap = build_folium_map(df, None)   # None forces the pin-only path
     if fmap is None:
         st.info("Map unavailable.")
         return
@@ -171,9 +154,6 @@ def _data_received_panel(df: pd.DataFrame):
     st.write(r.get("source_mix", {}) or "No data")
     st.markdown("**Latest 10 reports**")
     if len(df):
-        # Only select columns that actually exist in the dataframe.
-        # source / flags are produced by resolve_active() but not written
-        # back onto df, so they are not safe to select here.
         wanted = ["facility_name", "facility_type", "district", "rp_end",
                   "_submission_time", "direct"]
         present = [c for c in wanted if c in df.columns]
@@ -202,10 +182,12 @@ def render(df: pd.DataFrame, basis: str = "active"):
 
     ownership_by_type = _ownership_by_type()
     all_df = load_data()
+
+    # --- Filter options (deduplicated) ---
     services = ["All"] + sorted(all_df["facility_type"].dropna().unique().tolist())
     ownership_classes = ["All"] + sorted(set(ownership_by_type.values()))
-    regions = ["All"] + sorted(DIVISION_MAP.values())
-    districts = ["All"] + sorted(DIVISION_MAP.keys())
+    regions = ["All"] + sorted(set(DIVISION_MAP.values()))     # 6 divisions
+    districts = ["All"] + sorted(set(DIVISION_MAP.keys()))     # 30 districts
 
     f1, f2, f3, f4 = st.columns(4)
     svc = f1.selectbox("Service type", services, key="map_service")
@@ -233,7 +215,7 @@ def render(df: pd.DataFrame, basis: str = "active"):
 
     map_col, panel_col = st.columns([3, 2])
     with map_col:
-        st.markdown("**Sindh district map**")
+        st.markdown("**Sindh facilities on OpenStreetMap**")
         _render_map_or_fallback(fdf)
     with panel_col:
         st.markdown("### Headline")

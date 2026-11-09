@@ -147,22 +147,23 @@ def _fallback_map(df: pd.DataFrame):
                 )
                 continue
 
-            popup = (
-                f"<b>{row.get('facility_name','')}</b><br>"
-                f"Type: {ftype}<br>"
-                f"District: {row.get('district','')}<br>"
-                f"Direct: {row.get('direct','')}<br>"
+            popup_html = (
+                f"<b>{row.get('facility_name') or '(no name)'}</b><br>"
+                f"Type: {ftype or '(none)'}<br>"
+                f"District: {district or '(none)'}<br>"
+                f"Direct: {row.get('direct') or '(not resolved)'}<br>"
                 f"Lat/Lon: {lat:.4f}, {lon:.4f}"
             )
-            folium.Marker(
+            folium.CircleMarker(
                 location=[lat, lon],
-                popup=popup,
+                radius=5,
+                color=_folium_color(style["color"]),
+                fill=True,
+                fill_color=_folium_color(style["color"]),
+                fill_opacity=0.85,
+                weight=1,
+                popup=folium.Popup(popup_html, max_width=280),
                 tooltip=str(row.get("facility_name", "")),
-                icon=folium.Icon(
-                    color=_folium_color(style["color"]),
-                    icon=style["icon"],
-                    prefix="fa",
-                ),
             ).add_to(m)
             markers.append(
                 {
@@ -174,6 +175,13 @@ def _fallback_map(df: pd.DataFrame):
                     "inside_sindh_bbox": _coords_valid(lat, lon),
                 }
             )
+
+    # Auto-fit so every visible pin sits inside the viewport.
+    if markers:
+        lats = [mk["lat"] for mk in markers]
+        lons = [mk["lon"] for mk in markers]
+        m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
+
     m._fallback = True
     m._markers = markers
     m._missing_rows = (
@@ -187,9 +195,9 @@ def _fallback_map(df: pd.DataFrame):
 
 
 def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
-    # Boundary layers deferred. This function intentionally ignores
-    # ``boundaries`` until a licensed ADM2 file is supplied; the polygon
-    # branch below is preserved for future re-enablement but not called.
+    # Boundary layers deferred. Always pin-only until a licensed ADM2 file
+    # is supplied; _build_folium_map_with_polygons below is preserved for
+    # future use but not called.
     return _fallback_map(df)
 
 
@@ -253,22 +261,23 @@ def _build_folium_map_with_polygons(df: pd.DataFrame, boundaries: dict):
                 )
                 continue
 
-            popup = (
+            popup_html = (
                 f"<b>{row.get('facility_name','')}</b><br>"
                 f"Type: {ftype}<br>"
                 f"District: {row.get('district','')}<br>"
                 f"Direct: {row.get('direct','')}<br>"
                 f"Lat/Lon: {lat:.4f}, {lon:.4f}"
             )
-            folium.Marker(
+            folium.CircleMarker(
                 location=[lat, lon],
-                popup=popup,
+                radius=5,
+                color=_folium_color(style["color"]),
+                fill=True,
+                fill_color=_folium_color(style["color"]),
+                fill_opacity=0.85,
+                weight=1,
+                popup=folium.Popup(popup_html, max_width=280),
                 tooltip=str(row.get("facility_name", "")),
-                icon=folium.Icon(
-                    color=_folium_color(style["color"]),
-                    icon=style["icon"],
-                    prefix="fa",
-                ),
             ).add_to(m)
 
     m._missing_rows = (
