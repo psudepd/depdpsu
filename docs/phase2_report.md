@@ -69,3 +69,58 @@ Breakdown by file:
   test_reports.py             3 passed
 
 Phase 2 is done. Phase 3 (Executive UI + filters + breakdowns) is next.
+
+
+## Phase 3B/3C + Phase 4 (local only, deploy deferred)
+
+- src/ui/state.py: added DATA_SOURCE env switch (synthetic default; "live"
+  uses kobo_live.load_live()); "SYNTHETIC TEST DATA" banner concept added.
+- src/ui/pages/executive.py: Executive Overview page — reach summary (Direct,
+  Estimated family ×F, Estimated total reach), source-mix line, Active/
+  Cumulative toggle, Reports/Facilities/Districts/Divisions/New/Waiting KPI
+  cards, Plotly time-trend (gaps for missing periods), gender donut (W-only,
+  else "Gender not reported"), division bar chart, mini coverage district
+  table, latest-submission status line, Data received panel with Latest 10
+  reports + Excel/JPG download.
+- src/ui/pages/breakdowns.py: Breakdowns page — by service type (18, as filed,
+  regional_dir excluded, "No reports yet" for empty), by division (6, from
+  district mapping), by district (30 with division); each table follows the
+  Active/Cumulative toggle with reports, facilities, direct, indirect_x5,
+  total_reach, new, waiting, cumulative, male/female/other (W-only),
+  source-mix flag. "With suggested corrections" toggle (disabled, Phase 5)
+  with banner counting name-contains-"deaf reach" but type==gov_se rows.
+- src/ui/pages/map.py: Map page — map + Headline / Direct-by-service (18
+  cards) / Data received panels; filters above the map (service type,
+  ownership class, region, district); click-to-filter is Phase 5.
+- src/geo/boundaries.py: load_boundaries() returns (None, False) when
+  data/boundaries/sindh_districts.geojson is absent; validates district names
+  against data/choices.csv and raises MissingBoundariesError on mismatch.
+- src/geo/render_folium.py: folium renderer; neutral grey division polygons,
+  district outlines, facility pins only at valid coordinates (GIS lat/lon
+  parsed from the GIS column, inside Sindh bbox 24.0-28.5 N / 66.5-71.5 E,
+  inside the submitted district polygon); colour from ownership_by_type.csv,
+  shape/icon from gis_icon_map.csv; missing_boundaries_html() fallback.
+- src/geo/render_static.py: server-rendered JPG of full Sindh extent
+  (sindh_extent from exporters); geopandas+matplotlib imported inside the
+  function (RAM workaround); raises MissingBoundariesError when boundaries
+  is None.
+- app.py: sys.path fix already present; imports and renders executive,
+  breakdowns and map pages via the shared filter bar.
+
+- tests/test_state.py: 3 passed.
+- tests/test_breakdowns_page.py: 4 passed (reconciliation: service ==
+  division == district == aggregate_reach direct, ±0.1, 3 filter combos +
+  cumulative basis).
+- tests/test_geo.py: 6 passed.
+- Full suite: pytest tests/ -> 135 passed, 11 skipped, 0 failed.
+
+Known gaps:
+- boundaries missing (no data/boundaries/sindh_districts.geojson) → map page
+  shows the clear "GeoJSON missing" message and a fallback district table +
+  bar chart; no pins.
+- click-to-filter wiring is Phase 5.
+- deploy is blocked (git push fails "Repository not found" against the
+  remote); do not fix here — no git, no push, no deploy.
+
+Phase 3 (Executive UI + filters + breakdowns) + Phase 4 (GIS, local only)
+done locally. Phase 5 (click-to-filter, reviewed overrides) next.
