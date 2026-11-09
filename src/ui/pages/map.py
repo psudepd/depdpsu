@@ -7,10 +7,9 @@ Map + four panels:
       source mix, latest 10 reports
   (4) Filters above the map: service type, ownership class, region, district
 
-When the boundary GeoJSON is missing (the current state), a clear message is
-shown and a fallback district table + bar chart render instead of a map.
-Click-to-filter wiring is Phase 5: filters above the map drive the panels;
-clicking a marker shows a popup only.
+When the boundary GeoJSON is missing, a clear message is shown and a
+district table + bar chart render instead of a map. The map pins every
+submitted coordinate regardless of bbox (see render_folium policy).
 """
 from __future__ import annotations
 
@@ -24,7 +23,7 @@ from src.export.exporters import footer_text
 from src.geo.boundaries import load_boundaries
 from src.geo.render_folium import build_folium_map, missing_boundaries_html
 from src.geo.render_static import render_static_jpg
-from src.kpi.aggregate import aggregate_reach
+from src.kpi.aggregate import aggregate_reach, breakdown
 from src.kpi.geography import DIVISION_MAP
 from src.ui.components import kpi_card, table_with_downloads
 from src.ui.state import DATA_SOURCE, get_filtered_dataframe, load_data
@@ -38,27 +37,69 @@ OWNERSHIP_PATH = os.path.join(
     "ownership_by_type.csv",
 )
 
+# Fallback ownership class map, mirroring data/ownership_by_type.csv exactly.
+# Used ONLY if the CSV cannot be read (e.g. data/ not present in the
+# deployed bundle). The app logs a warning so this is visible.
+_OWNERSHIP_FALLBACK = {
+    "rcmhc": "government",
+    "rcph": "government",
+    "gov_se": "government",
+    "inclusive": "government",
+    "deaf_reach": "partner",
+    "sipmr": "other",
+    "ipmr": "other",
+    "carts": "government",
+    "nowpdp": "other",
+    "hostel": "other",
+    "vtc": "government",
+    "academy": "other",
+    "gia": "partner",
+    "sindh_persons_with_disabilitie": "government",
+    "dis_cer": "government",
+    "legal_support__beneficiaries": "other",
+    "pcrdp": "other",
+    "assistive_ip": "partner",
+    "regional_dir": "government",
+}
+
 
 def _ownership_by_type() -> dict:
-    df = pd.read_csv(OWNERSHIP_PATH)
-    return {
-        str(r["facility_type"]).strip(): str(r["ownership_class"]).strip()
-        for _, r in df.iterrows()
-    }
+    try:
+        df = pd.read_csv(OWNERSHIP_PATH)
+        return {
+            str(r["facility_type"]).strip(): str(r["ownership_class"]).strip()
+            for _, r in df.iterrows()
+        }
+    except FileNotFoundError:
+        st.warning(
+            f"ownership_by_type.csv not found at {OWNERSHIP_PATH}. "
+            "Using built-in fallback ownership classes. "
+            "This usually means the deployed bundle is missing data/."
+        )
+        return dict(_OWNERSHIP_FALLBACK)
 
 
 def _render_map_or_fallback(df: pd.DataFrame):
     boundaries, ok = load_boundaries()
     if not ok:
+        # Boundaries are missing — fall back to a district table + bar chart.
         st.components.v1.html(missing_boundaries_html(), height=70)
-        st.info("Fallback: district table (boundary file not yet supplied).")
-        from src.kpi.aggregate import breakdown
-
+        st.info(
+            "Fallback: district table (boundary file not yet supplied). "
+            "Pins on a real map require data/boundaries/sindh_districts.geojson."
+        )
         dist = breakdown(df, "district")
         if len(dist):
             st.bar_chart(dist.set_index("group")["direct"])
+            tbl = (
+                dist.reset_index()
+                .rename(columns={"group": "District", "direct": "Direct",
+                                 "family_x5": "Estimated family (x5)",
+                                 "total_reach": "Estimated total reach"})
+            )
+            table_with_downloads(tbl, "Direct by district", "map_district_table")
         else:
-            st.info("No district data.")
+            st.info("No district data in the current selection.")
         return
 
     fmap = build_folium_map(df, boundaries)
@@ -66,12 +107,19 @@ def _render_map_or_fallback(df: pd.DataFrame):
         st.info("Map unavailable.")
         return
     st_folium(fmap, width=700, height=500, key="depd_map")
+
+    # Show the "Submissions without coordinates" table when present.
     missing = getattr(fmap, "_missing_rows", None)
     if missing is not None and len(missing):
-        with st.expander("Missing / invalid location facilities", expanded=False):
+        with st.expander("Submissions without coordinates", expanded=False):
             st.dataframe(
-                missing[["facility_name", "facility_type", "district"]]
-                .rename(columns={"facility_name": "Facility", "facility_type": "Type", "district": "District"}),
+                missing.rename(
+                    columns={
+                        "facility_name": "Facility",
+                        "district": "District",
+                        "reason": "Reason",
+                    }
+                ),
                 use_container_width=True,
                 hide_index=True,
             )
@@ -89,8 +137,6 @@ def _headline_panel(df: pd.DataFrame):
 
 def _service_cards(df: pd.DataFrame):
     st.markdown("**Direct by service type (18)**")
-    from src.kpi.aggregate import breakdown
-
     bt = breakdown(df, "service")
     types = [
         "rcmhc", "rcph", "gov_se", "inclusive", "deaf_reach", "sipmr", "ipmr",
@@ -114,7 +160,11 @@ def _data_received_panel(df: pd.DataFrame):
     r = aggregate_reach(df, family_factor=FAMILY_FACTOR)
     kpi_card("Reports received", len(df))
     kpi_card("Distinct facilities", df["facility_name"].nunique() if len(df) else 0)
-    d_rep = df[df["district"].notna() & (df["district"].astype(str).str.strip() != "")] if len(df) else df
+    d_rep = (
+        df[df["district"].notna() & (df["district"].astype(str).str.strip() != "")]
+        if len(df)
+        else df
+    )
     kpi_card("Districts reporting", f"{d_rep['district'].nunique()}/{DISTRICTS_TOTAL}")
     st.caption("Last submission time (Asia/Karachi)")
     if len(df) and "_submission_time" in df.columns:
@@ -129,7 +179,8 @@ def _data_received_panel(df: pd.DataFrame):
     if len(df):
         latest = (
             df.sort_values("_submission_time", ascending=False)
-            [["facility_name", "facility_type", "district", "rp_end", "direct", "source", "flags"]]
+            [["facility_name", "facility_type", "district", "rp_end",
+              "direct", "source", "flags"]]
             .head(10)
         )
         table_with_downloads(latest, "Latest 10 reports", "map_latest_10")
