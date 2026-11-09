@@ -3,8 +3,13 @@ GIS Map Styling Module
 
 This module handles the styling of GIS map markers based on ownership and service type.
 Rules are defined in `docs/gis_map_styling.md` and `docs/gis_icon_map.csv`.
+
+Colour, shape and icon all come from ``gis_icon_map.csv``. ``ownership_by_type.csv``
+carries the ownership class per facility type; the map uses it only as a check
+(and to classify a facility as "office only" for regional_dir).
 """
 import pandas as pd
+
 
 class MapStyler:
     """
@@ -32,26 +37,17 @@ class MapStyler:
         Returns:
             dict: A dictionary containing 'color', 'shape', and 'icon' keys.
         """
-        # Get ownership class and color
-        ownership_info = self.ownership_df[self.ownership_df['facility_type'] == facility_type]
-        if ownership_info.empty:
-            return {
-                "color": "#6B7280",  # Grey for unknown types
-                "shape": "circle",
-                "icon": "question"
-            }
-
-        # Get icon and shape
+        # Colour, shape and icon all live in gis_icon_map.csv.
         icon_info = self.icon_map_df[self.icon_map_df['facility_type'] == facility_type]
         if icon_info.empty:
             return {
-                "color": ownership_info['colour_hex'].values[0],
+                "color": "#6B7280",   # grey for unknown types
                 "shape": "circle",
-                "icon": "question"
+                "icon": "question",
             }
 
         return {
-            "color": ownership_info['colour_hex'].values[0],
+            "color": icon_info['colour_hex'].values[0],
             "shape": icon_info['marker_shape'].values[0],
-            "icon": icon_info['suggested_icon_name'].values[0]
+            "icon": icon_info['suggested_icon_name'].values[0],
         }
