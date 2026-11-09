@@ -31,11 +31,12 @@ from src.ui.state import DATA_SOURCE, get_filtered_dataframe, load_data
 FAMILY_FACTOR = int(os.environ.get("FAMILY_FACTOR", "5"))
 DISTRICTS_TOTAL = 30
 
-OWNERSHIP_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "data",
-    "ownership_by_type.csv",
+# map.py is at repo/src/ui/pages/map.py — 4 dirname calls to reach repo root.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(_HERE))
 )
+OWNERSHIP_PATH = os.path.join(_REPO_ROOT, "data", "ownership_by_type.csv")
 
 _OWNERSHIP_FALLBACK = {
     "rcmhc": "government",
@@ -170,12 +171,20 @@ def _data_received_panel(df: pd.DataFrame):
     st.write(r.get("source_mix", {}) or "No data")
     st.markdown("**Latest 10 reports**")
     if len(df):
-        latest = (
-            df.sort_values("_submission_time", ascending=False)
-            [["facility_name", "facility_type", "district", "rp_end",
-              "direct", "source", "flags"]]
-            .head(10)
-        )
+        # Only select columns that actually exist in the dataframe.
+        # source / flags are produced by resolve_active() but not written
+        # back onto df, so they are not safe to select here.
+        wanted = ["facility_name", "facility_type", "district", "rp_end",
+                  "_submission_time", "direct"]
+        present = [c for c in wanted if c in df.columns]
+        if "_submission_time" in df.columns:
+            latest = (
+                df.sort_values("_submission_time", ascending=False)
+                  [present]
+                  .head(10)
+            )
+        else:
+            latest = df[present].head(10)
         table_with_downloads(latest, "Latest 10 reports", "map_latest_10")
     else:
         st.info("No reports in selection")
