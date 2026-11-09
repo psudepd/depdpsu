@@ -1,13 +1,16 @@
 """Geo / GIS tests.
 
-Behaviour under test (matches the chosen map policy):
-- The map is a READ-ONLY MIRROR of submitted coordinates.
-- Every row with numeric lat/lon is pinned, regardless of bbox.
-- Rows with blank lat/lon are NOT pinned and are listed in the
-  "Submissions without coordinates" table.
-- When boundaries are absent, the map falls back (no polygons,
-  no bbox filtering) instead of inventing polygons.
-- The static renderer must never invent polygons.
+Behaviour under test (matches the current map policy):
+
+  * Pins are placed at submitted coordinates when those are valid (inside
+    the Sindh bounding box).
+  * When submitted coordinates are missing or impossible, the pin is placed
+    at the district centroid and clearly labelled
+    (``location_source == "district"``). Every such row appears in
+    ``_missing_rows`` with a human-readable reason.
+  * Never a fake pin at a guessed facility location.
+  * The static renderer must never invent polygons: it raises
+    ``MissingBoundariesError`` when ``boundaries is None``.
 """
 import os
 
@@ -24,8 +27,13 @@ def _df():
     return pd.read_csv(FIXTURE)
 
 
+def _markers_by_name(m):
+    """Return {facility_name: marker_record} for a folium map."""
+    return {mk["facility_name"]: mk for mk in m._markers}
+
+
 # ---------------------------------------------------------------------------
-# Map pins — fallback (no boundaries file present)
+# Map surface — fallback shape
 # ---------------------------------------------------------------------------
 
 def test_fallback_map_returned_when_boundaries_missing():
@@ -37,46 +45,77 @@ def test_fallback_map_returned_when_boundaries_missing():
     assert hasattr(m, "_missing_rows")
 
 
-def test_fallback_pins_in_bbox_row():
-    """Row 1001 (Karachi 24.93, 67.07) is pinned."""
-    m = build_folium_map(_df(), None)
-    names = {mk["facility_name"] for mk in m._markers}
-    assert "TEST RCMHC Karachi Central" in names
-
-
-def test_fallback_pins_out_of_bbox_row():
-    """Row 1019 (London 51.5, -0.12) is ALSO pinned — the map mirrors
-    submitted coordinates. It is not filtered out and it is not listed
-    in the 'missing' table."""
-    m = build_folium_map(_df(), None)
-    names = {mk["facility_name"] for mk in m._markers}
-    assert "TEST RCPH Larkana" in names
-
-    tbl = m._missing_rows
-    table_names = {str(r["facility_name"]) for _, r in tbl.iterrows()}
-    assert "TEST RCPH Larkana" not in table_names
-
-
-def test_fallback_skips_blank_coords_row():
-    """Row 1018 (blank GIS) is NOT pinned and IS listed in the
-    'Submissions without coordinates' table with reason 'no coordinates'."""
-    m = build_folium_map(_df(), None)
-    names = {mk["facility_name"] for mk in m._markers}
-    assert "TEST Hostel Mirpurkhas Annex" not in names
-
-    tbl = m._missing_rows
-    reasons = {str(r["facility_name"]): str(r["reason"]) for _, r in tbl.iterrows()}
-    assert reasons.get("TEST Hostel Mirpurkhas Annex") == "no coordinates"
-
-
-def test_fallback_markers_record_bbox_flag():
-    """Each marker carries inside_sindh_bbox (True/False) so the page can
-    show a count of out-of-bbox pins without removing them."""
+def test_fallback_markers_record_location_source_and_bbox():
+    """Each marker carries location_source ('form' | 'district') and
+    inside_sindh_bbox (bool), so the page can summarise coverage without
+    recomputing geometry."""
     m = build_folium_map(_df(), None)
     assert len(m._markers) > 0
     for mk in m._markers:
+        assert "location_source" in mk
+        assert mk["location_source"] in {"form", "district"}
         assert "inside_sindh_bbox" in mk
         assert isinstance(mk["inside_sindh_bbox"], bool)
+
+
+# ---------------------------------------------------------------------------
+# Row 1001 — Karachi Central, valid coordinates
+# ---------------------------------------------------------------------------
+
+def test_row_1001_pinned_at_submitted_coordinates():
+    """Row 1001 (Karachi 24.93, 67.07) is pinned at its submitted coords."""
+    m = build_folium_map(_df(), None)
+    markers = _markers_by_name(m)
+    mk = markers.get("TEST RCMHC Karachi Central")
+    assert mk is not None, "row 1001 not pinned"
+    assert mk["location_source"] == "form"
+    assert 24.0 <= mk["lat"] <= 28.5
+    assert 66.5 <= mk["lon"] <= 71.5
+    # Not flagged as a fallback row.
+    reasons = {str(r["facility_name"]): str(r["reason"])
+               for _, r in m._missing_rows.iterrows()}
+    assert "TEST RCMHC Karachi Central" not in reasons
+
+
+# ---------------------------------------------------------------------------
+# Row 1019 — London coordinates, out of Sindh bbox
+# ---------------------------------------------------------------------------
+
+def test_row_1019_out_of_bbox_placed_at_district_centroid():
+    """Row 1019 (London 51.5, -0.12) cannot be pinned at London. It is
+    placed at its district centroid (Larkana) and clearly labelled."""
+    m = build_folium_map(_df(), None)
+    markers = _markers_by_name(m)
+    mk = markers.get("TEST RCPH Larkana")
+    assert mk is not None, "row 1019 not pinned at all"
+    assert mk["location_source"] == "district"
+    assert 24.0 <= mk["lat"] <= 28.5
+    assert 66.5 <= mk["lon"] <= 71.5
+
+    # And it is listed in the missing-locations table with the fallback reason.
+    reasons = {str(r["facility_name"]): str(r["reason"])
+               for _, r in m._missing_rows.iterrows()}
+    assert "TEST RCPH Larkana" in reasons
+    assert "district centroid" in reasons["TEST RCPH Larkana"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Row 1018 — blank coordinates
+# ---------------------------------------------------------------------------
+
+def test_row_1018_blank_coords_placed_at_district_centroid():
+    """Row 1018 (blank GIS) has no usable coordinates. It is placed at its
+    district centroid (Mirpurkhas) and clearly labelled, not skipped."""
+    m = build_folium_map(_df(), None)
+    markers = _markers_by_name(m)
+    mk = markers.get("TEST Hostel Mirpurkhas Annex")
+    assert mk is not None, "row 1018 not pinned at all"
+    assert mk["location_source"] == "district"
+
+    reasons = {str(r["facility_name"]): str(r["reason"])
+               for _, r in m._missing_rows.iterrows()}
+    assert "TEST Hostel Mirpurkhas Annex" in reasons
+    assert "district centroid" in reasons["TEST Hostel Mirpurkhas Annex"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +124,7 @@ def test_fallback_markers_record_bbox_flag():
 
 def test_static_raises_when_boundaries_missing():
     """The static JPG renderer must raise MissingBoundariesError when
-    boundaries is None. Uses whichever public name render_static.py exposes."""
+    boundaries is None."""
     from src.geo import render_static as rs
 
     render_fn = (
