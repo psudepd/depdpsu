@@ -7,6 +7,7 @@ re-resolves rows that already carry a numeric ``direct`` column.
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from typing import Optional
 
 import pandas as pd
@@ -26,12 +27,59 @@ DIVISIONS_PATH = os.path.join(PROJECT_ROOT, "data", "divisions.csv")
 NEW_FIELDS = ("w_new", "c_new", "n_new")
 WAITING_FIELDS = ("w_waiting", "c_waiting", "n_waiting")
 
+SANITY_CEILING = 1_000_000
+
+# Fallback division mapping. Mirrors data/district_division.csv + divisions.csv
+# exactly. Used ONLY if the CSVs cannot be read at runtime (e.g., the deployed
+# bundle does not include data/). Prevents the app from silently returning
+# "unknown" for every division.
+_DIVISION_NAME_FALLBACK = {
+    "karachi": "Karachi",
+    "hyderabad": "Hyderabad",
+    "shaheed_benazirabad": "Shaheed Benazirabad",
+    "mirpurkhas": "Mirpurkhas",
+    "sukkur": "Sukkur",
+    "larkana": "Larkana",
+}
+
+_DISTRICT_CODE_TO_DIVISION_CODE_FALLBACK = {
+    "karachi_central": "karachi",
+    "karachi_east": "karachi",
+    "karachi_south": "karachi",
+    "karachi_west": "karachi",
+    "korangi": "karachi",
+    "malir": "karachi",
+    "keamari": "karachi",
+    "hyderabad": "hyderabad",
+    "badin": "hyderabad",
+    "dadu": "hyderabad",
+    "jamshoro": "hyderabad",
+    "matiari": "hyderabad",
+    "tando_allahyar": "hyderabad",
+    "tando_muhammad_khan": "hyderabad",
+    "thatta": "hyderabad",
+    "sujawal": "hyderabad",
+    "shaheed_benazirabad": "shaheed_benazirabad",
+    "sanghar": "shaheed_benazirabad",
+    "naushahro_feroze": "shaheed_benazirabad",
+    "mirpurkhas": "mirpurkhas",
+    "umerkot": "mirpurkhas",
+    "tharparkar": "mirpurkhas",
+    "sukkur": "sukkur",
+    "khairpur": "sukkur",
+    "ghotki": "sukkur",
+    "larkana": "larkana",
+    "kamber_shahdadkot": "larkana",
+    "jacobabad": "larkana",
+    "kashmore": "larkana",
+    "shikarpur": "larkana",
+}
+
 
 def _norm_name(v) -> str:
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return ""
-    s = str(v).strip()
-    return s.lower()
+    return str(v).strip().lower()
 
 
 def _norm_district(v) -> str:
@@ -40,32 +88,47 @@ def _norm_district(v) -> str:
     return str(v).strip().lower().replace(" ", "_")
 
 
-def _first_non_blank(row, cols) -> float:
+def _first_non_blank(row, cols, ceiling: Optional[float] = None) -> float:
+    """First non-blank numeric value; optionally reject anything > ceiling."""
     for c in cols:
         if c in row.index:
             v = num(row[c])
-            if v is not None:
+            if v is not None and (ceiling is None or v <= ceiling):
                 return v
     return 0.0
 
 
+@lru_cache(maxsize=1)
 def _load_division_map() -> dict:
-    """district_name(normalised) -> division_name."""
-    dd = pd.read_csv(DISTRICT_DIVISION_PATH)
-    dv = pd.read_csv(DIVISIONS_PATH)
-    code_to_name = {
-        str(c).strip(): str(n).strip()
-        for c, n in zip(dv["division_code"], dv["division_name"])
-    }
-    m: dict = {}
-    for _, row in dd.iterrows():
-        dn = _norm_district(row["district_name"])
-        code = str(row["division_code"]).strip()
-        m[dn] = code_to_name.get(code, "unknown")
-    return m
+    """district_name(normalised) -> division_name.
+
+    Tries data/district_division.csv + data/divisions.csv first. If those
+    files are not readable at runtime, falls back to the hardcoded map that
+    mirrors them exactly.
+    """
+    try:
+        dd = pd.read_csv(DISTRICT_DIVISION_PATH)
+        dv = pd.read_csv(DIVISIONS_PATH)
+        code_to_name = {
+            str(c).strip(): str(n).strip()
+            for c, n in zip(dv["division_code"], dv["division_name"])
+        }
+        m: dict = {}
+        for _, row in dd.iterrows():
+            dn = _norm_district(row["district_name"])
+            code = str(row["division_code"]).strip()
+            m[dn] = code_to_name.get(code, "unknown")
+        return m
+    except FileNotFoundError:
+        # Hardcoded fallback equivalent to the two CSVs.
+        return {
+            _norm_district(k): _DIVISION_NAME_FALLBACK.get(v, "unknown")
+            for k, v in _DISTRICT_CODE_TO_DIVISION_CODE_FALLBACK.items()
+        }
 
 
-_DIVISION_MAP = _load_division_map()
+def _division_map() -> dict:
+    return _load_division_map()
 
 
 def select_latest_per_facility(df: pd.DataFrame) -> pd.DataFrame:
@@ -80,29 +143,28 @@ def select_latest_per_facility(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df
     d = df.copy()
+
     if "_validation_status" in d.columns:
         vs = d["_validation_status"]
         mask = vs.notna() & (vs.astype(str).str.strip() != "") & (
             vs.astype(str).str.lower() != "approved"
         )
         d = d[~mask]
+
     d["_norm_name"] = d.get(
         "facility_name", pd.Series([""] * len(d), index=d.index)
     ).apply(_norm_name)
-    rp = d.get("rp_end", pd.Series([""] * len(d), index=d.index)).astype(str)
 
-    def make_key(row):
-        rid = row.get("_id", None)
-        if rid is not None and str(rid).strip() != "":
-            return (row["_norm_name"], str(row.get("rp_end", "")), str(rid).strip())
-        return (
-            row["_norm_name"],
-            str(row.get("rp_end", "")),
-            str(row.get("_submission_time", "")),
-        )
+    rp_end_str = d.get("rp_end", pd.Series([""] * len(d), index=d.index)).astype(str)
+    id_str = d.get("_id", pd.Series([""] * len(d), index=d.index)).astype(str).str.strip()
+    st_str = d.get("_submission_time", pd.Series([""] * len(d), index=d.index)).astype(str)
+    tail = id_str.where(id_str != "", st_str)
+    d["_key"] = d["_norm_name"] + "\u0001" + rp_end_str + "\u0001" + tail
 
-    d["_key"] = d.apply(make_key, axis=1)
-    d["_st"] = pd.to_datetime(d.get("_submission_time"), errors="coerce")
+    d["_st"] = pd.to_datetime(
+        d.get("_submission_time", pd.Series([None] * len(d), index=d.index)),
+        errors="coerce",
+    )
     idx = d.groupby("_key")["_st"].idxmax()
     d = d.loc[idx].drop(columns=["_norm_name", "_key", "_st"])
     return d.reset_index(drop=True)
@@ -178,13 +240,17 @@ def breakdown(df: pd.DataFrame, by: str) -> pd.DataFrame:
     """Break reach down by service / division / district.
 
     by in {"service", "division", "district"}.  Uses existing numeric
-    ``direct`` column as-is; otherwise resolves per row.
+    ``direct`` column as-is; otherwise resolves per row.  Cumulative
+    values above SANITY_CEILING are excluded from the sum.
+
+    Returns a DataFrame with the group name in the ``group`` column.
     """
     if by not in ("service", "division", "district"):
         raise ValueError(f"unknown breakdown: {by}")
     if df is None or len(df) == 0:
         return pd.DataFrame(
             columns=[
+                "group",
                 "reports",
                 "facilities",
                 "direct",
@@ -208,7 +274,8 @@ def breakdown(df: pd.DataFrame, by: str) -> pd.DataFrame:
         norm_district = d.get(
             "district", pd.Series([""] * len(d), index=d.index)
         ).apply(_norm_district)
-        group = norm_district.apply(lambda x: _DIVISION_MAP.get(x, "unknown"))
+        dmap = _division_map()
+        group = norm_district.apply(lambda x: dmap.get(x, "unknown"))
     else:
         group = d.get(
             "district", pd.Series([""] * len(d), index=d.index)
@@ -229,7 +296,9 @@ def breakdown(df: pd.DataFrame, by: str) -> pd.DataFrame:
 
     d["_new"] = d.apply(lambda r: _first_non_blank(r, NEW_FIELDS), axis=1)
     d["_waiting"] = d.apply(lambda r: _first_non_blank(r, WAITING_FIELDS), axis=1)
-    d["_cumulative"] = d.apply(lambda r: _first_non_blank(r, CUM_FIELDS), axis=1)
+    d["_cumulative"] = d.apply(
+        lambda r: _first_non_blank(r, CUM_FIELDS, ceiling=SANITY_CEILING), axis=1
+    )
 
     d["_group"] = group.values
     out_rows = []
@@ -258,13 +327,10 @@ def breakdown(df: pd.DataFrame, by: str) -> pd.DataFrame:
     out = pd.DataFrame(out_rows)
     if out.empty:
         return out
-    out = out.sort_values("direct", ascending=False).reset_index(drop=True)
-    out = out.set_index("group")
-    out.index.name = None
-    return out
+    return out.sort_values("direct", ascending=False).reset_index(drop=True)
 
 
-def apply_sanity_ceiling(df: pd.DataFrame, ceiling: float = 1_000_000) -> pd.DataFrame:
+def apply_sanity_ceiling(df: pd.DataFrame, ceiling: float = SANITY_CEILING) -> pd.DataFrame:
     """Add boolean ``implausible_value`` where any cumulative field exceeds ceiling."""
     d = df.copy()
     d["implausible_value"] = False

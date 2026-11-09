@@ -2,6 +2,10 @@
 
 The fixture already carries a numeric "direct" column, so aggregate_reach and
 breakdown must use it as-is and never re-resolve those rows.
+
+Contract: breakdown(df, by) returns a DataFrame with the group label in a
+COLUMN called "group" and a RangeIndex (0..N). Do not use .loc[label, ...]
+or `label in df.index` — use boolean masks on the "group" column instead.
 """
 import json
 import os
@@ -33,6 +37,13 @@ def _load_df():
     return pd.read_csv(FIXTURE)
 
 
+def _row_for(b: pd.DataFrame, label: str) -> pd.Series:
+    """Return the single row of b whose 'group' equals label."""
+    match = b[b["group"] == label]
+    assert len(match) == 1, f"expected 1 row for group={label!r}, got {len(match)}"
+    return match.iloc[0]
+
+
 def test_total_matches_expected_107():
     df = _load_df()
     r = aggregate_reach(df)
@@ -46,10 +57,11 @@ def test_breakdown_by_service():
     b = breakdown(df, "service")
     expected = _load_expected()["by_facility_type_as_filed"]
     for ft, vals in expected.items():
-        if ft in b.index:
-            assert abs(b.loc[ft, "direct"] - vals["direct"]) < 0.1, (
-                f"{ft}: expected {vals['direct']} got {b.loc[ft, 'direct']}"
-            )
+        row = _row_for(b, ft)
+        got = float(row["direct"])
+        assert abs(got - vals["direct"]) < 0.1, (
+            f"{ft}: expected {vals['direct']} got {got}"
+        )
 
 
 def test_breakdown_by_division():
@@ -57,17 +69,26 @@ def test_breakdown_by_division():
     b = breakdown(df, "division")
     expected = _load_expected()["by_division"]
     for div, vals in expected.items():
-        assert abs(b.loc[div, "direct"] - vals["direct"]) < 0.1, (
-            f"{div}: expected {vals['direct']} got {b.loc[div, 'direct']}"
+        row = _row_for(b, div)
+        got = float(row["direct"])
+        assert abs(got - vals["direct"]) < 0.1, (
+            f"{div}: expected {vals['direct']} got {got}"
         )
-    assert "Karachi" in b.index and b.loc["Karachi", "reports"] > 0
-    assert "Mirpurkhas" in b.index and b.loc["Mirpurkhas", "reports"] > 0
+    # Karachi and Mirpurkhas must be present with non-zero reports.
+    karachi = _row_for(b, "Karachi")
+    mirpurkhas = _row_for(b, "Mirpurkhas")
+    assert karachi["reports"] > 0, "Karachi missing"
+    assert mirpurkhas["reports"] > 0, "Mirpurkhas missing"
 
 
 def test_regional_dir_excluded():
     df = _load_df()
     b = breakdown(df, "service")
-    assert "regional_dir" not in b.index or b.loc["regional_dir", "direct"] == 0
+    # regional_dir must not be present as a service group at all, OR if present,
+    # its direct must be zero. It is an office, not a service (spec 4E).
+    matches = b[b["group"] == "regional_dir"]
+    if len(matches) > 0:
+        assert float(matches.iloc[0]["direct"]) == 0, "regional_dir counted as a service"
 
 
 def test_select_latest_per_facility_keeps_different_ids():

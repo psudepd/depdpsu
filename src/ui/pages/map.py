@@ -1,246 +1,341 @@
-"""GIS map page (Phase 4).
+"""KPI aggregation helpers built on top of src/kpi/resolver.py.
 
-Map + four panels:
-  (1) Headline: Direct, Estimated family, Estimated total
-  (2) Direct by service type: 18 cards
-  (3) Data received: reports, facilities, districts x/30, last submission,
-      source mix, latest 10 reports
-  (4) Filters above the map: service type, ownership class, region, district
-
-When the boundary GeoJSON is missing, a clear message is shown and a
-district table + bar chart render instead of a map. The map pins every
-submitted coordinate regardless of bbox (see render_folium policy).
+Reads canonical (already-resolved or resolvable) submission frames and
+produces headline reach figures, breakdowns and sanity flags.  Never
+re-resolves rows that already carry a numeric ``direct`` column.
 """
 from __future__ import annotations
 
 import os
+from functools import lru_cache
+from typing import Optional
 
 import pandas as pd
-import streamlit as st
-from streamlit_folium import st_folium
 
-from src.export.exporters import footer_text
-from src.geo.boundaries import load_boundaries
-from src.geo.render_folium import build_folium_map, missing_boundaries_html
-from src.geo.render_static import render_static_jpg
-from src.kpi.aggregate import aggregate_reach, breakdown
-from src.kpi.geography import DIVISION_MAP
-from src.ui.components import kpi_card, table_with_downloads
-from src.ui.state import DATA_SOURCE, get_filtered_dataframe, load_data
-
-FAMILY_FACTOR = int(os.environ.get("FAMILY_FACTOR", "5"))
-DISTRICTS_TOTAL = 30
-
-OWNERSHIP_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "data",
-    "ownership_by_type.csv",
+from src.kpi.resolver import (
+    CUM_FIELDS,
+    FAMILY_FACTOR,
+    num,
+    resolve_active,
 )
 
-# Fallback ownership class map, mirroring data/ownership_by_type.csv exactly.
-# Used ONLY if the CSV cannot be read (e.g. data/ not present in the
-# deployed bundle). The app logs a warning so this is visible.
-_OWNERSHIP_FALLBACK = {
-    "rcmhc": "government",
-    "rcph": "government",
-    "gov_se": "government",
-    "inclusive": "government",
-    "deaf_reach": "partner",
-    "sipmr": "other",
-    "ipmr": "other",
-    "carts": "government",
-    "nowpdp": "other",
-    "hostel": "other",
-    "vtc": "government",
-    "academy": "other",
-    "gia": "partner",
-    "sindh_persons_with_disabilitie": "government",
-    "dis_cer": "government",
-    "legal_support__beneficiaries": "other",
-    "pcrdp": "other",
-    "assistive_ip": "partner",
-    "regional_dir": "government",
+HERE = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir))
+DISTRICT_DIVISION_PATH = os.path.join(PROJECT_ROOT, "data", "district_division.csv")
+DIVISIONS_PATH = os.path.join(PROJECT_ROOT, "data", "divisions.csv")
+
+NEW_FIELDS = ("w_new", "c_new", "n_new")
+WAITING_FIELDS = ("w_waiting", "c_waiting", "n_waiting")
+
+SANITY_CEILING = 1_000_000
+
+# Fallback division mapping. Mirrors data/district_division.csv + divisions.csv
+# exactly. Used ONLY if the CSVs cannot be read at runtime (e.g., the deployed
+# bundle does not include data/). Prevents the app from silently returning
+# "unknown" for every division.
+_DIVISION_NAME_FALLBACK = {
+    "karachi": "Karachi",
+    "hyderabad": "Hyderabad",
+    "shaheed_benazirabad": "Shaheed Benazirabad",
+    "mirpurkhas": "Mirpurkhas",
+    "sukkur": "Sukkur",
+    "larkana": "Larkana",
+}
+
+_DISTRICT_CODE_TO_DIVISION_CODE_FALLBACK = {
+    "karachi_central": "karachi",
+    "karachi_east": "karachi",
+    "karachi_south": "karachi",
+    "karachi_west": "karachi",
+    "korangi": "karachi",
+    "malir": "karachi",
+    "keamari": "karachi",
+    "hyderabad": "hyderabad",
+    "badin": "hyderabad",
+    "dadu": "hyderabad",
+    "jamshoro": "hyderabad",
+    "matiari": "hyderabad",
+    "tando_allahyar": "hyderabad",
+    "tando_muhammad_khan": "hyderabad",
+    "thatta": "hyderabad",
+    "sujawal": "hyderabad",
+    "shaheed_benazirabad": "shaheed_benazirabad",
+    "sanghar": "shaheed_benazirabad",
+    "naushahro_feroze": "shaheed_benazirabad",
+    "mirpurkhas": "mirpurkhas",
+    "umerkot": "mirpurkhas",
+    "tharparkar": "mirpurkhas",
+    "sukkur": "sukkur",
+    "khairpur": "sukkur",
+    "ghotki": "sukkur",
+    "larkana": "larkana",
+    "kamber_shahdadkot": "larkana",
+    "jacobabad": "larkana",
+    "kashmore": "larkana",
+    "shikarpur": "larkana",
 }
 
 
-def _ownership_by_type() -> dict:
+def _norm_name(v) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    return str(v).strip().lower()
+
+
+def _norm_district(v) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    return str(v).strip().lower().replace(" ", "_")
+
+
+def _first_non_blank(row, cols, ceiling: Optional[float] = None) -> float:
+    """First non-blank numeric value; optionally reject anything > ceiling."""
+    for c in cols:
+        if c in row.index:
+            v = num(row[c])
+            if v is not None and (ceiling is None or v <= ceiling):
+                return v
+    return 0.0
+
+
+@lru_cache(maxsize=1)
+def _load_division_map() -> dict:
+    """district_name(normalised) -> division_name.
+
+    Tries data/district_division.csv + data/divisions.csv first. If those
+    files are not readable at runtime, falls back to the hardcoded map that
+    mirrors them exactly.
+    """
     try:
-        df = pd.read_csv(OWNERSHIP_PATH)
-        return {
-            str(r["facility_type"]).strip(): str(r["ownership_class"]).strip()
-            for _, r in df.iterrows()
+        dd = pd.read_csv(DISTRICT_DIVISION_PATH)
+        dv = pd.read_csv(DIVISIONS_PATH)
+        code_to_name = {
+            str(c).strip(): str(n).strip()
+            for c, n in zip(dv["division_code"], dv["division_name"])
         }
+        m: dict = {}
+        for _, row in dd.iterrows():
+            dn = _norm_district(row["district_name"])
+            code = str(row["division_code"]).strip()
+            m[dn] = code_to_name.get(code, "unknown")
+        return m
     except FileNotFoundError:
-        st.warning(
-            f"ownership_by_type.csv not found at {OWNERSHIP_PATH}. "
-            "Using built-in fallback ownership classes. "
-            "This usually means the deployed bundle is missing data/."
+        # Hardcoded fallback equivalent to the two CSVs.
+        return {
+            _norm_district(k): _DIVISION_NAME_FALLBACK.get(v, "unknown")
+            for k, v in _DISTRICT_CODE_TO_DIVISION_CODE_FALLBACK.items()
+        }
+
+
+def _division_map() -> dict:
+    return _load_division_map()
+
+
+def select_latest_per_facility(df: pd.DataFrame) -> pd.DataFrame:
+    """Deduplicate submissions per facility, keeping the latest per key.
+
+    If ``_validation_status`` is present, drop rows whose value is present
+    and not "approved" (blank/missing kept).  Dedup key is
+    (normalised facility_name, rp_end, _id); when _id is blank fall back to
+    (normalised facility_name, rp_end, _submission_time).  Rows with the
+    same name but different _id are never collapsed.  regional_dir is kept.
+    """
+    if df is None or df.empty:
+        return df
+    d = df.copy()
+
+    if "_validation_status" in d.columns:
+        vs = d["_validation_status"]
+        mask = vs.notna() & (vs.astype(str).str.strip() != "") & (
+            vs.astype(str).str.lower() != "approved"
         )
-        return dict(_OWNERSHIP_FALLBACK)
+        d = d[~mask]
 
+    d["_norm_name"] = d.get(
+        "facility_name", pd.Series([""] * len(d), index=d.index)
+    ).apply(_norm_name)
 
-def _render_map_or_fallback(df: pd.DataFrame):
-    boundaries, ok = load_boundaries()
-    if not ok:
-        # Boundaries are missing — fall back to a district table + bar chart.
-        st.components.v1.html(missing_boundaries_html(), height=70)
-        st.info(
-            "Fallback: district table (boundary file not yet supplied). "
-            "Pins on a real map require data/boundaries/sindh_districts.geojson."
-        )
-        dist = breakdown(df, "district")
-        if len(dist):
-            st.bar_chart(dist.set_index("group")["direct"])
-            tbl = (
-                dist.reset_index()
-                .rename(columns={"group": "District", "direct": "Direct",
-                                 "family_x5": "Estimated family (x5)",
-                                 "total_reach": "Estimated total reach"})
-            )
-            table_with_downloads(tbl, "Direct by district", "map_district_table")
-        else:
-            st.info("No district data in the current selection.")
-        return
+    rp_end_str = d.get("rp_end", pd.Series([""] * len(d), index=d.index)).astype(str)
+    id_str = d.get("_id", pd.Series([""] * len(d), index=d.index)).astype(str).str.strip()
+    st_str = d.get("_submission_time", pd.Series([""] * len(d), index=d.index)).astype(str)
+    tail = id_str.where(id_str != "", st_str)
+    d["_key"] = d["_norm_name"] + "\u0001" + rp_end_str + "\u0001" + tail
 
-    fmap = build_folium_map(df, boundaries)
-    if fmap is None:
-        st.info("Map unavailable.")
-        return
-    st_folium(fmap, width=700, height=500, key="depd_map")
-
-    # Show the "Submissions without coordinates" table when present.
-    missing = getattr(fmap, "_missing_rows", None)
-    if missing is not None and len(missing):
-        with st.expander("Submissions without coordinates", expanded=False):
-            st.dataframe(
-                missing.rename(
-                    columns={
-                        "facility_name": "Facility",
-                        "district": "District",
-                        "reason": "Reason",
-                    }
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-
-def _headline_panel(df: pd.DataFrame):
-    r = aggregate_reach(df, family_factor=FAMILY_FACTOR)
-    kpi_card("Direct beneficiaries", f"{r['direct']:,.0f}",
-             "Facility-reported unique headcounts (resolved per Section 5.3).")
-    kpi_card("Estimated family (indirect)", f"{r['family']:,.0f}",
-             f"Estimated model: Direct × {FAMILY_FACTOR}. Not a count.")
-    kpi_card("Estimated total reach", f"{r['total']:,.0f}",
-             "Estimated total reach = Direct + family estimate.")
-
-
-def _service_cards(df: pd.DataFrame):
-    st.markdown("**Direct by service type (18)**")
-    bt = breakdown(df, "service")
-    types = [
-        "rcmhc", "rcph", "gov_se", "inclusive", "deaf_reach", "sipmr", "ipmr",
-        "carts", "nowpdp", "hostel", "vtc", "academy", "gia",
-        "sindh_persons_with_disabilitie", "dis_cer",
-        "legal_support__beneficiaries", "pcrdp", "assistive_ip",
-    ]
-    by_type = {}
-    if len(bt):
-        by_type = dict(zip(bt["group"].astype(str), bt["direct"]))
-    cols = st.columns(3)
-    for i, t in enumerate(types):
-        with cols[i % 3]:
-            val = by_type.get(t, 0.0)
-            status = "No reports" if val == 0 and t not in by_type else ""
-            kpi_card(t, f"{val:,.0f}" + ("" if status == "" else " · No reports"))
-
-
-def _data_received_panel(df: pd.DataFrame):
-    st.markdown("**Data received**")
-    r = aggregate_reach(df, family_factor=FAMILY_FACTOR)
-    kpi_card("Reports received", len(df))
-    kpi_card("Distinct facilities", df["facility_name"].nunique() if len(df) else 0)
-    d_rep = (
-        df[df["district"].notna() & (df["district"].astype(str).str.strip() != "")]
-        if len(df)
-        else df
+    d["_st"] = pd.to_datetime(
+        d.get("_submission_time", pd.Series([None] * len(d), index=d.index)),
+        errors="coerce",
     )
-    kpi_card("Districts reporting", f"{d_rep['district'].nunique()}/{DISTRICTS_TOTAL}")
-    st.caption("Last submission time (Asia/Karachi)")
-    if len(df) and "_submission_time" in df.columns:
-        times = pd.to_datetime(df["_submission_time"], errors="coerce").dropna()
-        ts = times.max().strftime("%Y-%m-%d %H:%M") if len(times) else "—"
-        st.caption(ts)
+    idx = d.groupby("_key")["_st"].idxmax()
+    d = d.loc[idx].drop(columns=["_norm_name", "_key", "_st"])
+    return d.reset_index(drop=True)
+
+
+def _has_numeric_direct(df: pd.DataFrame) -> bool:
+    return "direct" in df.columns and pd.api.types.is_numeric_dtype(df["direct"])
+
+
+def aggregate_reach(df: pd.DataFrame, family_factor: float = 5) -> dict:
+    """Headline reach summary.
+
+    Uses an existing numeric ``direct`` column as-is (never re-resolves);
+    otherwise resolves per row via resolve_active.  Ignores rows whose
+    source is "not_applicable" or whose direct is blank.
+    """
+    empty = {
+        "direct": 0.0,
+        "family": 0.0,
+        "total": 0.0,
+        "source_mix": {},
+        "rows_resolved": 0,
+        "rows_skipped": 0,
+    }
+    if df is None or len(df) == 0:
+        return empty
+    d = df.copy()
+    direct_vals: list = []
+    sources: list = []
+    resolved = 0
+    skipped = 0
+    use_existing = _has_numeric_direct(d)
+    if use_existing:
+        direct_series = pd.to_numeric(d["direct"], errors="coerce")
+        for i, row in d.iterrows():
+            src = row.get("source", "")
+            if pd.isna(src) or str(src).strip() == "not_applicable":
+                skipped += 1
+                continue
+            dv = direct_series.loc[i]
+            if pd.isna(dv):
+                skipped += 1
+                continue
+            direct_vals.append(float(dv))
+            sources.append(str(src).strip())
+            resolved += 1
     else:
-        st.caption("—")
-    st.markdown("**Source mix**")
-    st.write(r.get("source_mix", {}) or "No data")
-    st.markdown("**Latest 10 reports**")
-    if len(df):
-        latest = (
-            df.sort_values("_submission_time", ascending=False)
-            [["facility_name", "facility_type", "district", "rp_end",
-              "direct", "source", "flags"]]
-            .head(10)
+        for _, row in d.iterrows():
+            r = resolve_active(row.to_dict())
+            src = r.get("source", "")
+            dv = r.get("direct")
+            if src == "not_applicable" or dv is None:
+                skipped += 1
+                continue
+            direct_vals.append(float(dv))
+            sources.append(str(src))
+            resolved += 1
+    total_direct = sum(direct_vals)
+    source_mix: dict = {}
+    for s in sources:
+        source_mix[s] = source_mix.get(s, 0) + 1
+    return {
+        "direct": total_direct,
+        "family": total_direct * family_factor,
+        "total": total_direct * (1 + family_factor),
+        "source_mix": source_mix,
+        "rows_resolved": resolved,
+        "rows_skipped": skipped,
+    }
+
+
+def breakdown(df: pd.DataFrame, by: str) -> pd.DataFrame:
+    """Break reach down by service / division / district.
+
+    by in {"service", "division", "district"}.  Uses existing numeric
+    ``direct`` column as-is; otherwise resolves per row.  Cumulative
+    values above SANITY_CEILING are excluded from the sum.
+
+    Returns a DataFrame with the group name in the ``group`` column.
+    """
+    if by not in ("service", "division", "district"):
+        raise ValueError(f"unknown breakdown: {by}")
+    if df is None or len(df) == 0:
+        return pd.DataFrame(
+            columns=[
+                "group",
+                "reports",
+                "facilities",
+                "direct",
+                "family_x5",
+                "total_reach",
+                "new",
+                "waiting",
+                "cumulative",
+                "source_mix",
+            ]
         )
-        table_with_downloads(latest, "Latest 10 reports", "map_latest_10")
+    d = df.copy()
+    if by == "service":
+        d = d[d.get("facility_type", pd.Series([""] * len(d), index=d.index)).astype(
+            str
+        ) != "regional_dir"].copy()
+        group = d.get(
+            "facility_type", pd.Series([""] * len(d), index=d.index)
+        ).astype(str)
+    elif by == "division":
+        norm_district = d.get(
+            "district", pd.Series([""] * len(d), index=d.index)
+        ).apply(_norm_district)
+        dmap = _division_map()
+        group = norm_district.apply(lambda x: dmap.get(x, "unknown"))
     else:
-        st.info("No reports in selection")
+        group = d.get(
+            "district", pd.Series([""] * len(d), index=d.index)
+        ).astype(str)
 
-
-def render(df: pd.DataFrame, basis: str = "active"):
-    """Render the GIS map page."""
-    st.title("DEPD Geographic Coverage")
-    if DATA_SOURCE != "live":
-        st.warning(
-            "SYNTHETIC TEST DATA — demonstrating the pipeline, not real figures."
+    if _has_numeric_direct(d):
+        d["_direct"] = pd.to_numeric(d["direct"], errors="coerce").fillna(0.0)
+        d["_source"] = d.get("source", pd.Series([""] * len(d), index=d.index)).astype(
+            str
         )
+    else:
+        resolved = d.apply(lambda r: resolve_active(r.to_dict()), axis=1)
+        d["_direct"] = [
+            float(r.get("direct")) if r.get("direct") is not None else 0.0
+            for r in resolved
+        ]
+        d["_source"] = [str(r.get("source", "")) for r in resolved]
 
-    st.caption(f"Basis: {basis}")
+    d["_new"] = d.apply(lambda r: _first_non_blank(r, NEW_FIELDS), axis=1)
+    d["_waiting"] = d.apply(lambda r: _first_non_blank(r, WAITING_FIELDS), axis=1)
+    d["_cumulative"] = d.apply(
+        lambda r: _first_non_blank(r, CUM_FIELDS, ceiling=SANITY_CEILING), axis=1
+    )
 
-    # --- Filters above the map ---
-    ownership_by_type = _ownership_by_type()
-    all_df = load_data()
-    services = ["All"] + sorted(all_df["facility_type"].dropna().unique().tolist())
-    ownership_classes = ["All"] + sorted(set(ownership_by_type.values()))
-    regions = ["All"] + sorted(DIVISION_MAP.values())
-    districts = ["All"] + sorted(DIVISION_MAP.keys())
+    d["_group"] = group.values
+    out_rows = []
+    for key, sub in d.groupby("_group", dropna=False):
+        direct_sum = float(sub["_direct"].sum())
+        source_mix: dict = {}
+        for s in sub["_source"]:
+            source_mix[s] = source_mix.get(s, 0) + 1
+        names = sub.get(
+            "facility_name", pd.Series([""] * len(sub), index=sub.index)
+        ).apply(_norm_name)
+        out_rows.append(
+            {
+                "group": key,
+                "reports": int(len(sub)),
+                "facilities": int(names[names != ""].nunique()),
+                "direct": direct_sum,
+                "family_x5": direct_sum * FAMILY_FACTOR,
+                "total_reach": direct_sum * (1 + FAMILY_FACTOR),
+                "new": float(sub["_new"].sum()),
+                "waiting": float(sub["_waiting"].sum()),
+                "cumulative": float(sub["_cumulative"].sum()),
+                "source_mix": source_mix,
+            }
+        )
+    out = pd.DataFrame(out_rows)
+    if out.empty:
+        return out
+    return out.sort_values("direct", ascending=False).reset_index(drop=True)
 
-    f1, f2, f3, f4 = st.columns(4)
-    svc = f1.selectbox("Service type", services, key="map_service")
-    own = f2.selectbox("Ownership class", ownership_classes, key="map_ownership")
-    reg = f3.selectbox("Region (division)", regions, key="map_region")
-    dist = f4.selectbox("District", districts, key="map_district")
 
-    fdf = df.copy()
-    if svc != "All":
-        fdf = fdf[fdf["facility_type"].astype(str) == svc]
-    if own != "All":
-        allowed = {t for t, c in ownership_by_type.items() if c == own}
-        fdf = fdf[fdf["facility_type"].astype(str).isin(allowed)]
-    if reg != "All":
-        fdf = fdf[fdf["division_mapped"].astype(str) == reg]
-    if dist != "All":
-        fdf = fdf[fdf["district"].astype(str) == dist]
-
-    chip = " · ".join(
-        f"{k}={v}" for k, v in {
-            "service": svc, "ownership": own, "region": reg, "district": dist,
-        }.items() if v != "All"
-    ) or "All Sindh"
-    st.caption(f"Filters: {chip} · Basis: {basis}")
-
-    # --- Layout: map left, panels right ---
-    map_col, panel_col = st.columns([3, 2])
-    with map_col:
-        st.markdown("**Sindh district map**")
-        _render_map_or_fallback(fdf)
-    with panel_col:
-        st.markdown("### Headline")
-        _headline_panel(fdf)
-        st.markdown("---")
-        st.markdown("### Direct by service type")
-        _service_cards(fdf)
-        st.markdown("---")
-        st.markdown("### Data received")
-        _data_received_panel(fdf)
+def apply_sanity_ceiling(df: pd.DataFrame, ceiling: float = SANITY_CEILING) -> pd.DataFrame:
+    """Add boolean ``implausible_value`` where any cumulative field exceeds ceiling."""
+    d = df.copy()
+    d["implausible_value"] = False
+    for c in CUM_FIELDS:
+        if c in d.columns:
+            vals = pd.to_numeric(d[c], errors="coerce")
+            d["implausible_value"] = d["implausible_value"] | (vals > ceiling)
+    return d
