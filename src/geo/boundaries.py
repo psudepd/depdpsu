@@ -3,6 +3,12 @@
 Loads data/boundaries/sindh_districts.geojson if present. Never invents
 polygons. Validates district names against data/choices.csv (districts list)
 and raises a clear error naming any mismatch.
+
+Interim behaviour: if the file is a national (ADM0) or otherwise coarse
+boundary — 1 feature, or every feature tagged shapeType "ADM0"/"ADM1" —
+it is accepted as-is without district validation. The map then shows the
+national outline with pins. District-level choropleth resumes automatically
+when a proper 30-district Sindh ADM2 file is supplied.
 """
 from __future__ import annotations
 
@@ -27,21 +33,39 @@ def _choices_districts() -> set:
     return {str(n).strip() for n in dist["name"].dropna()}
 
 
+def _is_national(gj: dict) -> bool:
+    """True when the GeoJSON is a country-level or otherwise coarse boundary."""
+    features = gj.get("features", [])
+    if len(features) <= 1:
+        return True
+    for f in features:
+        props = (f.get("properties") or {})
+        st = str(props.get("shapeType", "")).strip().upper()
+        if st not in ("ADM0", "ADM1"):
+            return False
+    return True
+
+
 def load_boundaries(path: str = BOUNDARY_PATH):
     """Load the Sindh district boundary GeoJSON.
 
     Returns (geojson_dict, ok_flag):
       - (None, False) when the file does not exist (caller renders fallback).
-      - (geojson, True) when loaded and district names validate against
-        data/choices.csv.
+      - (geojson, True) when loaded. If the file is a national (ADM0) or
+        coarse boundary, accepted without district validation. If it looks
+        like a district file, names are validated against data/choices.csv.
 
-    Raises MissingBoundariesError if the file exists but its district names
-    do not match the choices.csv districts list (mismatch named).
+    Raises MissingBoundariesError if the file exists, is a district file,
+    and its district names do not match the choices.csv districts list.
     """
     if not os.path.exists(path):
         return None, False
     with open(path, encoding="utf-8") as fh:
         gj = json.load(fh)
+
+    # Interim: accept national / coarse boundaries without district checks.
+    if _is_national(gj):
+        return gj, True
 
     gj_districts = set()
     for feature in gj.get("features", []):

@@ -1,15 +1,13 @@
-"""Folium map renderer for the DEPD Sindh GIS page (Phase 4).
+"""Folium map renderer for the DEPD Sindh GIS page.
 
-Renders facility pins only at valid coordinates:
-  (a) _GIS_latitude / _GIS_longitude present, AND
-  (b) point inside Sindh bbox (24.0-28.5 N, 66.5-71.5 E), AND
-  (c) point inside the polygon of the submitted district (when boundaries
-      are available).
-Otherwise no pin; the facility is listed in a "Missing / invalid location"
-panel (handled by the map page).
+Design principle: the map is a READ-ONLY MIRROR of what facilities
+submitted. Pins are placed at the coordinates entered in the Kobo form,
+regardless of whether those coordinates are inside the Sindh bounding box.
+Coordinate validation belongs in the Kobo form and the Data Quality page,
+not in the map.
 
-Marker colour comes from data/ownership_by_type.csv (via MapStyler),
-shape + icon from docs/gis_icon_map.csv.
+Marker colour comes from data/ownership_by_type.csv (via MapStyler or
+docs/gis_icon_map.csv); icon from docs/gis_icon_map.csv.
 """
 from __future__ import annotations
 
@@ -29,6 +27,25 @@ OWNERSHIP_PATH = os.path.join(PROJECT_ROOT, "data", "ownership_by_type.csv")
 ICON_MAP_PATH = os.path.join(PROJECT_ROOT, "docs", "gis_icon_map.csv")
 
 SINDH_BBOX = (24.0, 66.5, 28.5, 71.5)  # min_lat, min_lon, max_lat, max_lon
+
+# Folium's built-in Icon accepts only these 19 preset names, not hex codes.
+# Map DEPD's ownership hex colours to the closest preset.
+_FOLIUM_COLOR_ALIAS = {
+    "#2E7D32": "darkgreen",   # government
+    "#1F5FBF": "darkblue",    # partner
+    "#7B3FA0": "purple",      # other
+    "#6B7280": "gray",        # unknown
+}
+
+
+def _folium_color(hex_or_name: str) -> str:
+    """Return a colour name that folium.Icon accepts."""
+    if not hex_or_name:
+        return "cadetblue"
+    s = str(hex_or_name).strip()
+    if s.startswith("#"):
+        return _FOLIUM_COLOR_ALIAS.get(s.upper(), "cadetblue")
+    return s if s in set(_FOLIUM_COLOR_ALIAS.values()) else "cadetblue"
 
 
 def _icon_styles() -> dict:
@@ -85,6 +102,8 @@ def _gis_lat_lon(row):
 
 
 def _coords_valid(lat: float, lon: float) -> bool:
+    """Bbox test — used ONLY to classify a pin as inside/outside Sindh
+    for the info line. It does NOT filter pins out of the map."""
     if lat is None or lon is None:
         return False
     min_lat, min_lon, max_lat, max_lon = SINDH_BBOX
@@ -94,7 +113,7 @@ def _coords_valid(lat: float, lon: float) -> bool:
 def _point_in_district(lat: float, lon: float, district: str, district_polys: dict) -> bool:
     poly = district_polys.get(district)
     if poly is None or not isinstance(poly, BaseGeometry):
-        return True  # no polygon to check against -> accept if coords valid
+        return True  # no polygon to check against -> accept
     return poly.contains(Point(lon, lat))
 
 
@@ -105,58 +124,57 @@ def _styler():
 FALLBACK_WARNING = (
     '<div style="padding:12px;border:1px solid #b00020;background:#fdecea;color:#660000;">'
     "<b>District boundaries not loaded.</b> "
-    "Pins shown for <b>MANUAL verification only</b>. "
-    "A point inside Sindh bbox is <b>NOT</b> a guarantee it belongs to the "
-    "submitted district. Confirm each pin against the district list before "
-    "treating it as valid.</div>"
+    "Pins show the coordinates entered in the Kobo form. Data validation "
+    "happens in the form and the Data Quality page, not in this dashboard.</div>"
+)
+
+SUBMITTED_COORDS_INFO = (
+    "Coordinates are shown exactly as submitted. Data validation is handled "
+    "in the Kobo form and the Data Quality page, not in this dashboard."
 )
 
 
 def _fallback_map(df: pd.DataFrame):
-    """Fallback folium map when district boundaries are missing.
+    """Folium map without district polygons.
 
-    OpenStreetMap tiles, no district polygons, pins for every row with
-    valid coordinates (inside Sindh bbox). District point-in-polygon check
-    is DISABLED because polygons are unavailable; only the bbox check runs.
+    Pins EVERY row that has numeric lat/lon, regardless of whether it is
+    inside the Sindh bbox. Rows with blank coordinates go into the
+    'Submissions without coordinates' list. No bbox filtering.
     """
-    m = folium.Map(location=[26.5, 68.5], zoom_start=7, tiles="OpenStreetMap")
+    m = folium.Map(location=[26.5, 68.5], zoom_start=6, tiles="OpenStreetMap")
     markers = []
-    missing_rows = []
+    no_coords_rows = []
     if df is not None and len(df):
         for _, row in df.iterrows():
             ftype = str(row.get("facility_type", "")).strip()
             style = _icon_style(ftype)
             lat, lon = _gis_lat_lon(row)
             district = row.get("district")
-            # Fallback mode: bbox check only; district containment disabled.
-            valid = lat is not None and lon is not None and _coords_valid(lat, lon)
-            if not valid:
-                if lat is None or lon is None:
-                    reason = "no coordinates"
-                else:
-                    reason = "outside Sindh bbox"
-                missing_rows.append(
+
+            if lat is None or lon is None:
+                no_coords_rows.append(
                     {
                         "facility_name": row.get("facility_name", ""),
                         "district": district,
-                        "lat": lat,
-                        "lon": lon,
-                        "reason": reason,
+                        "reason": "no coordinates",
                     }
                 )
                 continue
+
+            # Pin EVERY row with coordinates. No bbox filter.
             popup = (
                 f"<b>{row.get('facility_name','')}</b><br>"
                 f"Type: {ftype}<br>"
                 f"District: {row.get('district','')}<br>"
-                f"Direct: {row.get('direct','')}"
+                f"Direct: {row.get('direct','')}<br>"
+                f"Lat/Lon: {lat:.4f}, {lon:.4f}"
             )
             folium.Marker(
                 location=[lat, lon],
                 popup=popup,
                 tooltip=str(row.get("facility_name", "")),
                 icon=folium.Icon(
-                    color=style["color"],
+                    color=_folium_color(style["color"]),
                     icon=style["icon"],
                     prefix="fa",
                 ),
@@ -168,31 +186,33 @@ def _fallback_map(df: pd.DataFrame):
                     "district": district,
                     "lat": lat,
                     "lon": lon,
+                    "inside_sindh_bbox": _coords_valid(lat, lon),
                 }
             )
     m._fallback = True
     m._markers = markers
     m._missing_rows = (
-        pd.DataFrame(missing_rows, columns=["facility_name", "district", "lat", "lon", "reason"])
-        if missing_rows
-        else pd.DataFrame(columns=["facility_name", "district", "lat", "lon", "reason"])
+        pd.DataFrame(no_coords_rows, columns=["facility_name", "district", "reason"])
+        if no_coords_rows
+        else pd.DataFrame(columns=["facility_name", "district", "reason"])
     )
     m._warning_html = FALLBACK_WARNING
+    m._info_html = SUBMITTED_COORDS_INFO
     return m
 
 
 def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
     """Build a folium.Map for the Sindh district boundaries.
 
-    When boundaries is None (GeoJSON missing), renders a fallback folium map
-    with OpenStreetMap tiles, no district polygons, and pins for every row
-    with valid coordinates (bbox check only; district containment disabled,
-    because polygons are unavailable).
+    When boundaries is None (GeoJSON missing), renders a fallback map.
+    When boundaries are available, draws district polygons for shading
+    and pins every submitted coordinate; polygons are NOT used to reject
+    pins (validation lives in the form and Data Quality page).
     """
     if boundaries is None:
         return _fallback_map(df)
 
-    # District polygons keyed by district name for point-in-district checks.
+    # District polygons keyed by district name (for shading only).
     district_polys: dict = {}
     for feature in boundaries.get("features", []):
         props = feature.get("properties", {}) or {}
@@ -208,10 +228,9 @@ def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
 
     styler = _styler()
 
-    # Centre on Sindh.
     m = folium.Map(location=[26.5, 68.5], zoom_start=7, tiles="CartoDB positron")
 
-    # Neutral grey division polygons + district outlines.
+    # Neutral grey district polygons.
     for feature in boundaries.get("features", []):
         props = feature.get("properties", {}) or {}
         name = (
@@ -234,45 +253,48 @@ def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
             tooltip=str(name),
         ).add_to(m)
 
-    # Facility pins (valid coordinates only).
+    no_coords_rows = []
     if df is not None and len(df):
-        missing_rows = []
         for _, row in df.iterrows():
             ftype = str(row.get("facility_type", "")).strip()
             style = styler.get_marker_style(ftype)
             lat, lon = _gis_lat_lon(row)
-            district = row.get("district")
-            valid = (
-                lat is not None
-                and lon is not None
-                and _coords_valid(lat, lon)
-                and _point_in_district(lat, lon, district, district_polys)
-            )
-            if not valid:
-                missing_rows.append(row)
+
+            if lat is None or lon is None:
+                no_coords_rows.append(
+                    {
+                        "facility_name": row.get("facility_name", ""),
+                        "district": row.get("district"),
+                        "reason": "no coordinates",
+                    }
+                )
                 continue
+
+            # Pin EVERY row with coordinates. Polygons are shading only.
             popup = (
                 f"<b>{row.get('facility_name','')}</b><br>"
                 f"Type: {ftype}<br>"
                 f"District: {row.get('district','')}<br>"
-                f"Direct: {row.get('direct','')}"
+                f"Direct: {row.get('direct','')}<br>"
+                f"Lat/Lon: {lat:.4f}, {lon:.4f}"
             )
             folium.Marker(
                 location=[lat, lon],
                 popup=popup,
                 tooltip=str(row.get("facility_name", "")),
                 icon=folium.Icon(
-                    color=style["color"],
+                    color=_folium_color(style["color"]),
                     icon=style["icon"],
                     prefix="fa",
                 ),
             ).add_to(m)
 
-        # Missing / invalid location panel (returned as attribute for the page).
-        m._missing_rows = pd.DataFrame(missing_rows) if missing_rows else pd.DataFrame()
-    else:
-        m._missing_rows = pd.DataFrame()
-
+    m._missing_rows = (
+        pd.DataFrame(no_coords_rows, columns=["facility_name", "district", "reason"])
+        if no_coords_rows
+        else pd.DataFrame(columns=["facility_name", "district", "reason"])
+    )
+    m._info_html = SUBMITTED_COORDS_INFO
     return m
 
 
