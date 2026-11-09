@@ -11,6 +11,9 @@ Behaviour under test (matches the current map policy):
   * Never a fake pin at a guessed facility location.
   * The static renderer must never invent polygons: it raises
     ``MissingBoundariesError`` when ``boundaries is None``.
+  * The renderer strips a leading ``TEST`` prefix from facility names in
+    markers and in ``_missing_rows``; these tests therefore key on the
+    cleaned names.
 """
 import os
 
@@ -53,7 +56,7 @@ def test_fallback_markers_record_location_source_and_bbox():
     assert len(m._markers) > 0
     for mk in m._markers:
         assert "location_source" in mk
-        assert mk["location_source"] in {"form", "district"}
+        assert mk["location_source"] in {"form", "district", "form_outside_sindh"}
         assert "inside_sindh_bbox" in mk
         assert isinstance(mk["inside_sindh_bbox"], bool)
 
@@ -66,7 +69,7 @@ def test_row_1001_pinned_at_submitted_coordinates():
     """Row 1001 (Karachi 24.93, 67.07) is pinned at its submitted coords."""
     m = build_folium_map(_df(), None)
     markers = _markers_by_name(m)
-    mk = markers.get("TEST RCMHC Karachi Central")
+    mk = markers.get("RCMHC Karachi Central")
     assert mk is not None, "row 1001 not pinned"
     assert mk["location_source"] == "form"
     assert 24.0 <= mk["lat"] <= 28.5
@@ -74,7 +77,7 @@ def test_row_1001_pinned_at_submitted_coordinates():
     # Not flagged as a fallback row.
     reasons = {str(r["facility_name"]): str(r["reason"])
                for _, r in m._missing_rows.iterrows()}
-    assert "TEST RCMHC Karachi Central" not in reasons
+    assert "RCMHC Karachi Central" not in reasons
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +89,7 @@ def test_row_1019_out_of_bbox_placed_at_district_centroid():
     placed at its district centroid (Larkana) and clearly labelled."""
     m = build_folium_map(_df(), None)
     markers = _markers_by_name(m)
-    mk = markers.get("TEST RCPH Larkana")
+    mk = markers.get("RCPH Larkana")
     assert mk is not None, "row 1019 not pinned at all"
     assert mk["location_source"] == "district"
     assert 24.0 <= mk["lat"] <= 28.5
@@ -95,8 +98,8 @@ def test_row_1019_out_of_bbox_placed_at_district_centroid():
     # And it is listed in the missing-locations table with the fallback reason.
     reasons = {str(r["facility_name"]): str(r["reason"])
                for _, r in m._missing_rows.iterrows()}
-    assert "TEST RCPH Larkana" in reasons
-    assert "district centroid" in reasons["TEST RCPH Larkana"].lower()
+    assert "RCPH Larkana" in reasons
+    assert "district centroid" in reasons["RCPH Larkana"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -108,14 +111,27 @@ def test_row_1018_blank_coords_placed_at_district_centroid():
     district centroid (Mirpurkhas) and clearly labelled, not skipped."""
     m = build_folium_map(_df(), None)
     markers = _markers_by_name(m)
-    mk = markers.get("TEST Hostel Mirpurkhas Annex")
+    mk = markers.get("Hostel Mirpurkhas Annex")
     assert mk is not None, "row 1018 not pinned at all"
     assert mk["location_source"] == "district"
 
     reasons = {str(r["facility_name"]): str(r["reason"])
                for _, r in m._missing_rows.iterrows()}
-    assert "TEST Hostel Mirpurkhas Annex" in reasons
-    assert "district centroid" in reasons["TEST Hostel Mirpurkhas Annex"].lower()
+    assert "Hostel Mirpurkhas Annex" in reasons
+    assert "district centroid" in reasons["Hostel Mirpurkhas Annex"].lower()
+
+
+# ---------------------------------------------------------------------------
+# TEST prefix is stripped from names in both markers and the fallback table
+# ---------------------------------------------------------------------------
+
+def test_test_prefix_is_stripped_from_names():
+    """No marker or missing-row name should start with 'TEST '."""
+    m = build_folium_map(_df(), None)
+    for mk in m._markers:
+        assert not str(mk["facility_name"]).upper().startswith("TEST "), mk
+    for _, r in m._missing_rows.iterrows():
+        assert not str(r["facility_name"]).upper().startswith("TEST "), r
 
 
 # ---------------------------------------------------------------------------
