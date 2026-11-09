@@ -6,8 +6,8 @@ regardless of whether those coordinates are inside the Sindh bounding box.
 Coordinate validation belongs in the Kobo form and the Data Quality page,
 not in the map.
 
-Marker colour comes from data/ownership_by_type.csv (via MapStyler or
-docs/gis_icon_map.csv); icon from docs/gis_icon_map.csv.
+Boundary policy (interim): polygon layers are deferred until a licensed
+ADM2 file is available. This module always renders the pin-only path.
 """
 from __future__ import annotations
 
@@ -114,10 +114,10 @@ def _styler():
 
 
 FALLBACK_WARNING = (
-    '<div style="padding:12px;border:1px solid #b00020;background:#fdecea;color:#660000;">'
-    "<b>District boundaries not loaded.</b> "
-    "Pins show the coordinates entered in the Kobo form. Data validation "
-    "happens in the form and the Data Quality page, not in this dashboard.</div>"
+    '<div style="padding:12px;border:1px solid #1F5FBF;background:#eef3f8;color:#18345A;">'
+    "<b>Facility pins on OpenStreetMap.</b> "
+    "District polygon layers are deferred until a licensed ADM2 boundary is available. "
+    "Coordinates are shown as submitted; validation happens in the Kobo form.</div>"
 )
 
 SUBMITTED_COORDS_INFO = (
@@ -187,9 +187,15 @@ def _fallback_map(df: pd.DataFrame):
 
 
 def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
-    if boundaries is None:
-        return _fallback_map(df)
+    # Boundary layers deferred. This function intentionally ignores
+    # ``boundaries`` until a licensed ADM2 file is supplied; the polygon
+    # branch below is preserved for future re-enablement but not called.
+    return _fallback_map(df)
 
+
+def _build_folium_map_with_polygons(df: pd.DataFrame, boundaries: dict):
+    """Preserved for future use when a licensed ADM2 file is available.
+    Not called by the current app."""
     district_polys: dict = {}
     for feature in boundaries.get("features", []):
         props = feature.get("properties", {}) or {}
@@ -205,8 +211,7 @@ def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
             district_polys[str(name).strip()] = shape(geom)
 
     styler = _styler()
-
-    m = folium.Map(location=[26.5, 68.5], zoom_start=7, tiles="CartoDB positron")
+    m = folium.Map(location=[26.5, 68.5], zoom_start=7, tiles="OpenStreetMap")
 
     for feature in boundaries.get("features", []):
         props = feature.get("properties", {}) or {}
@@ -277,9 +282,8 @@ def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
 
 def missing_boundaries_html() -> str:
     return (
-        '<div style="padding:12px;border:1px solid #b00020;background:#fdecea;color:#660000;">'
-        "<b>District boundary GeoJSON missing.</b> "
-        "Download the Pakistan subnational administrative boundaries from HDX and place it at "
-        "<code>data/boundaries/sindh_districts.geojson</code>. "
-        "Table view shown instead.</div>"
+        '<div style="padding:12px;border:1px solid #1F5FBF;background:#eef3f8;color:#18345A;">'
+        "<b>District polygon layers not enabled.</b> "
+        "Facility pins are shown on OpenStreetMap. "
+        "District boundaries will be added when a licensed ADM2 file is available.</div>"
     )
