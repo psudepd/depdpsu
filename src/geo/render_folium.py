@@ -28,18 +28,15 @@ ICON_MAP_PATH = os.path.join(PROJECT_ROOT, "docs", "gis_icon_map.csv")
 
 SINDH_BBOX = (24.0, 66.5, 28.5, 71.5)  # min_lat, min_lon, max_lat, max_lon
 
-# Folium's built-in Icon accepts only these 19 preset names, not hex codes.
-# Map DEPD's ownership hex colours to the closest preset.
 _FOLIUM_COLOR_ALIAS = {
-    "#2E7D32": "darkgreen",   # government
-    "#1F5FBF": "darkblue",    # partner
-    "#7B3FA0": "purple",      # other
-    "#6B7280": "gray",        # unknown
+    "#2E7D32": "darkgreen",
+    "#1F5FBF": "darkblue",
+    "#7B3FA0": "purple",
+    "#6B7280": "gray",
 }
 
 
 def _folium_color(hex_or_name: str) -> str:
-    """Return a colour name that folium.Icon accepts."""
     if not hex_or_name:
         return "cadetblue"
     s = str(hex_or_name).strip()
@@ -49,7 +46,6 @@ def _folium_color(hex_or_name: str) -> str:
 
 
 def _icon_styles() -> dict:
-    """Load colour/shape/icon per facility type from docs/gis_icon_map.csv."""
     icon_df = pd.read_csv(ICON_MAP_PATH)
     styles: dict = {}
     for _, r in icon_df.iterrows():
@@ -80,8 +76,6 @@ def _num(v):
 
 
 def _gis_lat_lon(row):
-    """Return (lat, lon) from _GIS_* columns or by parsing the GIS geopoint
-    string ("lat lon alt prec"). Returns (None, None) when unavailable."""
     lat = _num(row.get("_GIS_latitude"))
     lon = _num(row.get("_GIS_longitude"))
     if lat is not None and lon is not None:
@@ -102,8 +96,6 @@ def _gis_lat_lon(row):
 
 
 def _coords_valid(lat: float, lon: float) -> bool:
-    """Bbox test — used ONLY to classify a pin as inside/outside Sindh
-    for the info line. It does NOT filter pins out of the map."""
     if lat is None or lon is None:
         return False
     min_lat, min_lon, max_lat, max_lon = SINDH_BBOX
@@ -113,7 +105,7 @@ def _coords_valid(lat: float, lon: float) -> bool:
 def _point_in_district(lat: float, lon: float, district: str, district_polys: dict) -> bool:
     poly = district_polys.get(district)
     if poly is None or not isinstance(poly, BaseGeometry):
-        return True  # no polygon to check against -> accept
+        return True
     return poly.contains(Point(lon, lat))
 
 
@@ -135,12 +127,6 @@ SUBMITTED_COORDS_INFO = (
 
 
 def _fallback_map(df: pd.DataFrame):
-    """Folium map without district polygons.
-
-    Pins EVERY row that has numeric lat/lon, regardless of whether it is
-    inside the Sindh bbox. Rows with blank coordinates go into the
-    'Submissions without coordinates' list. No bbox filtering.
-    """
     m = folium.Map(location=[26.5, 68.5], zoom_start=6, tiles="OpenStreetMap")
     markers = []
     no_coords_rows = []
@@ -161,7 +147,6 @@ def _fallback_map(df: pd.DataFrame):
                 )
                 continue
 
-            # Pin EVERY row with coordinates. No bbox filter.
             popup = (
                 f"<b>{row.get('facility_name','')}</b><br>"
                 f"Type: {ftype}<br>"
@@ -202,17 +187,9 @@ def _fallback_map(df: pd.DataFrame):
 
 
 def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
-    """Build a folium.Map for the Sindh district boundaries.
-
-    When boundaries is None (GeoJSON missing), renders a fallback map.
-    When boundaries are available, draws district polygons for shading
-    and pins every submitted coordinate; polygons are NOT used to reject
-    pins (validation lives in the form and Data Quality page).
-    """
     if boundaries is None:
         return _fallback_map(df)
 
-    # District polygons keyed by district name (for shading only).
     district_polys: dict = {}
     for feature in boundaries.get("features", []):
         props = feature.get("properties", {}) or {}
@@ -221,6 +198,7 @@ def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
             or props.get("name")
             or props.get("DISTRICT")
             or props.get("district")
+            or props.get("shapeName")
         )
         geom = feature.get("geometry")
         if name is not None and geom is not None:
@@ -230,7 +208,6 @@ def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
 
     m = folium.Map(location=[26.5, 68.5], zoom_start=7, tiles="CartoDB positron")
 
-    # Neutral grey district polygons.
     for feature in boundaries.get("features", []):
         props = feature.get("properties", {}) or {}
         name = (
@@ -238,6 +215,7 @@ def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
             or props.get("name")
             or props.get("DISTRICT")
             or props.get("district")
+            or props.get("shapeName")
         )
         geom = feature.get("geometry")
         if name is None or geom is None:
@@ -270,7 +248,6 @@ def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
                 )
                 continue
 
-            # Pin EVERY row with coordinates. Polygons are shading only.
             popup = (
                 f"<b>{row.get('facility_name','')}</b><br>"
                 f"Type: {ftype}<br>"
@@ -299,7 +276,6 @@ def build_folium_map(df: pd.DataFrame, boundaries: dict | None):
 
 
 def missing_boundaries_html() -> str:
-    """HTML shown when the boundary GeoJSON is missing."""
     return (
         '<div style="padding:12px;border:1px solid #b00020;background:#fdecea;color:#660000;">'
         "<b>District boundary GeoJSON missing.</b> "
