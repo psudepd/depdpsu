@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import textwrap
 
 import folium
 import pandas as pd
@@ -82,28 +83,27 @@ DEFAULT_ICONS = {
     "regional_dir": "building",
 }
 
-# Human-readable labels for the facility types (used in tooltip "Service — Name")
-SERVICE_LABELS = {
-    "rcmhc": "RCMHC",
-    "rcph": "RCPH",
-    "gov_se": "Govt SE Centre",
-    "inclusive": "Inclusive Education",
-    "deaf_reach": "Deaf Reach",
-    "sipmr": "SIPMR",
-    "ipmr": "IPMR",
-    "carts": "C-ARTS",
-    "nowpdp": "NOWPDP",
-    "hostel": "Hostel",
-    "vtc": "VTC",
-    "academy": "Academy",
-    "gia": "GIA",
-    "sindh_persons_with_disabilitie": "SPDPA",
-    "dis_cer": "Disability Certificate",
-    "legal_support__beneficiaries": "Legal Support",
-    "pcrdp": "PCRDP",
-    "assistive_ip": "Assistive Devices",
-    "regional_dir": "Regional Directorate",
-}
+def _load_service_labels() -> dict:
+    path = os.path.join(PROJECT_ROOT, "data", "choices.csv")
+    try:
+        df = pd.read_csv(path, dtype=str)
+        ft = df[df["list_name"] == "facility_types"]
+        return {str(r["name"]).strip(): str(r["label"]).strip()
+                for _, r in ft.iterrows()}
+    except Exception:
+        return {}
+
+
+SERVICE_LABELS = _load_service_labels()
+
+
+def _service_label(ftype: str) -> str:
+    key = str(ftype or "").strip()
+    if not key:
+        return ""
+    if key in SERVICE_LABELS and SERVICE_LABELS[key]:
+        return SERVICE_LABELS[key]
+    return key.replace("_", " ").title()
 
 _FA_COLOR = {
     "#2E7D32": "green",
@@ -247,8 +247,8 @@ def _location_html(location_source: str) -> str:
 
 
 def _tooltip_text(facility_type: str, facility_name) -> str:
-    """Tooltip format: 'Service label — Facility name' (TEST prefix removed)."""
-    label = SERVICE_LABELS.get(str(facility_type).strip(), str(facility_type).strip() or "Service")
+    """Tooltip format: '<Full Label> — <Facility Name>' (TEST prefix removed)."""
+    label = _service_label(facility_type) or "Service"
     name = _clean_name(facility_name)
     if name:
         return f"{label} — {name}"
@@ -258,7 +258,12 @@ def _tooltip_text(facility_type: str, facility_name) -> str:
 def _popup_html(row, location_source: str) -> str:
     ftype = str(row.get("facility_type") or "").strip()
     name = _clean_name(row.get("facility_name")) or "(no name)"
-    ftype_label = SERVICE_LABELS.get(ftype, ftype or "(none)")
+    ftype_label = _service_label(ftype) or "(none)"
+    if len(ftype_label) > 50:
+        lines = textwrap.wrap(ftype_label, width=50)
+        wrapped_label = "<br/>".join(lines)
+    else:
+        wrapped_label = ftype_label
     district = str(row.get("district") or "&mdash;")
     division = str(row.get("division_mapped") or row.get("division") or "&mdash;")
     period = str(row.get("rp_end") or "&mdash;")
@@ -278,8 +283,10 @@ def _popup_html(row, location_source: str) -> str:
         'padding:8px 6px;border-radius:6px;">'
         f'<div style="font-size:15px;font-weight:700;line-height:1.3;'
         f'margin-bottom:2px;color:#18345A;">{name}</div>'
+        f'<div style="font-size:12px;color:#1F5FBF;font-weight:600;line-height:1.3;'
+        f'margin-bottom:4px;">{wrapped_label}</div>'
         f'<div style="font-size:12px;color:#66758C;margin-bottom:8px;">'
-        f'{ftype_label} &middot; {district} &middot; {division}</div>'
+        f'{district} &middot; {division}</div>'
         f'<div style="font-size:11px;margin-bottom:10px;">{loc_html}</div>'
         '<table style="width:100%;font-size:12px;border-collapse:collapse;">'
         f'<tr><td style="color:#66758C;padding:2px 0;">Direct</td>'
