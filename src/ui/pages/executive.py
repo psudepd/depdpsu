@@ -184,6 +184,9 @@ def render(df: pd.DataFrame, basis: str = "active"):
     """Render the Executive Overview page for the given filtered dataframe."""
     st.title("DEPD Executive Analytics")
 
+    source_label = "LIVE" if DATA_SOURCE == "live" else "SYNTHETIC"
+    st.caption(f"Data source: {source_label}")
+
     if DATA_SOURCE != "live":
         st.warning(
             "SYNTHETIC TEST DATA — demonstrating the pipeline, not real figures. "

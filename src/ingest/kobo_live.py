@@ -65,6 +65,13 @@ def _config(url=None, token=None):
     url = url or os.environ.get('KOBO_EXPORT_URL')
     token = token or os.environ.get('KOBO_API_TOKEN')
     if not url:
+        try:
+            import streamlit as st
+            url = url or st.secrets.get('KOBO_EXPORT_URL')
+            token = token or st.secrets.get('KOBO_API_TOKEN')
+        except Exception:
+            pass
+    if not url:
         raise RuntimeError('KOBO_EXPORT_URL is not set')
     return url, token
 

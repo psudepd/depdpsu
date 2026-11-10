@@ -173,6 +173,8 @@ def _data_received_panel(df: pd.DataFrame):
 def render(df: pd.DataFrame, basis: str = "active"):
     """Render the GIS map page."""
     st.title("DEPD Geographic Coverage")
+    source_label = "LIVE" if DATA_SOURCE == "live" else "SYNTHETIC"
+    st.caption(f"Data source: {source_label}")
     if DATA_SOURCE != "live":
         st.warning(
             "SYNTHETIC TEST DATA — demonstrating the pipeline, not real figures."

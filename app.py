@@ -10,12 +10,15 @@ from src.kpi.aggregate import aggregate_reach, breakdown
 from src.ui.pages.executive import render as render_executive
 from src.ui.pages.breakdowns import render as render_breakdowns
 from src.ui.pages.map import render as render_map
-from src.ui.state import get_filtered_dataframe, load_data
+from src.ui.state import DATA_SOURCE, get_filtered_dataframe, load_data
 
 st.set_page_config(page_title="DEPD Dashboard", layout="wide")
 
 st.title("DEPD Executive Analytics")
-st.caption("SYNTHETIC TEST DATA — demonstrating the pipeline, not real figures")
+if DATA_SOURCE == "live":
+    st.caption("Data source: LIVE (KoboToolbox)")
+else:
+    st.caption("Data source: SYNTHETIC · demonstrating the pipeline, not real figures")
 
 # Sidebar navigation (stub — only the Executive page is implemented for now)
 page = st.sidebar.radio("Page", ["Executive Overview", "Breakdowns", "Map"])
