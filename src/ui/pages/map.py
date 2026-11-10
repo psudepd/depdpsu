@@ -86,6 +86,13 @@ def _render_map_or_fallback(df: pd.DataFrame):
     if fmap is None:
         st.info("Map unavailable.")
         return
+
+    markers = getattr(fmap, "_markers", [])
+    n = len(markers)
+    r = sum(1 for mk in markers if mk.get("location_source") in ("form", "form_outside_sindh"))
+    c = sum(1 for mk in markers if mk.get("location_source") == "district")
+    st.caption(f"Pins shown: {n} — {r} with real coordinates, {c} at district centroid fallback")
+
     st_folium(fmap, use_container_width=True, height=700, key="depd_map")
 
     missing = getattr(fmap, "_missing_rows", None)

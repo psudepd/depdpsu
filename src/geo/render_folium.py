@@ -215,8 +215,8 @@ def _marker_radius(direct) -> int:
     except (TypeError, ValueError):
         v = 0
     if v <= 0:
-        return 6
-    return int(max(6, min(22, math.sqrt(v) * 1.3)))
+        return 4
+    return int(max(4, min(8, 4 + math.sqrt(v) * 0.2)))
 
 
 def _fmt(v) -> str:
@@ -406,6 +406,8 @@ def build_folium_map(df: pd.DataFrame, boundaries: dict | None = None):
     )
     m._warning_html = FALLBACK_WARNING
     m._info_html = SUBMITTED_COORDS_INFO
+    df_len = len(df) if df is not None else 0
+    print(f"map build: {df_len} rows → {len(m._markers)} pins ({len(m._markers) - df_len} delta)")
     return m
 
 
