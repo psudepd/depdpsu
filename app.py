@@ -1,16 +1,13 @@
+"""DEPD Executive Analytics dashboard — local entry point."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-"""DEPD Executive Analytics dashboard — local entry point."""
 import streamlit as st
 
-from src.ui.components import kpi_card, table_with_downloads
-from src.ui.state import get_filtered_dataframe, load_data
-from src.kpi.aggregate import aggregate_reach, breakdown
+from src.ui.state import DATA_SOURCE, get_filtered_dataframe, load_data
 from src.ui.pages.executive import render as render_executive
 from src.ui.pages.breakdowns import render as render_breakdowns
 from src.ui.pages.map import render as render_map
-from src.ui.state import DATA_SOURCE, get_filtered_dataframe, load_data
 
 st.set_page_config(page_title="DEPD Dashboard", layout="wide")
 

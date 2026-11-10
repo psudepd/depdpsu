@@ -7,6 +7,12 @@ FAMILY_FACTOR = 5                      # config: average family members counted 
 NO_W = {'pcrdp', 'assistive_ip', 'regional_dir'}   # no beneficiary summary (Section W hidden)
 MISMATCH_TOLERANCE = 0.20             # W vs section figure difference that triggers "review"
 
+# CHANGED: plausibility guard for cumulative fields.
+# Any single facility reporting more than this many direct beneficiaries
+# since establishment is treated as invalid data (typo, concatenation,
+# overflow). Adjust upward if your programme legitimately exceeds it.
+MAX_PLAUSIBLE_DIRECT = 1_000_000
+
 def num(v):
     if v is None or v == '' : return None
     try:
@@ -72,8 +78,14 @@ def resolve_active(r):
     return dict(direct=d, source=src, confidence=conf, flags=';'.join(flags))
 
 def resolve_cumulative(r):
-    if r.get('facility_type') in NO_W: return dict(direct=None, source='not_collected')
+    if r.get('facility_type') in NO_W:
+        return dict(direct=None, source='not_collected')
     C, f = cumulative(r)
+    # CHANGED: reject implausible cumulative values instead of letting them
+    # propagate. `source='invalid_value'` is visible downstream so the page
+    # can show a warning rather than a silent zero.
+    if C is not None and C > MAX_PLAUSIBLE_DIRECT:
+        return dict(direct=None, source='invalid_value')
     return dict(direct=C, source=f or 'not_collected')
 
 def reach(direct, factor=FAMILY_FACTOR):

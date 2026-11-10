@@ -11,9 +11,11 @@ from __future__ import annotations
 import os
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 import pandas as pd
+import streamlit as st  # needed for @st.cache_data
 
 from src.kpi.aggregate import select_latest_per_facility
 from src.kpi.geography import add_division_columns
@@ -27,8 +29,9 @@ def _detect_data_source() -> str:
     explicit = os.environ.get("DATA_SOURCE") or os.environ.get("DEPD_DATA_SOURCE")
     if not explicit:
         try:
-            import streamlit as st
-            explicit = st.secrets.get("DATA_SOURCE") or st.secrets.get("DEPD_DATA_SOURCE")
+            explicit = st.secrets.get("DATA_SOURCE") or st.secrets.get(
+                "DEPD_DATA_SOURCE"
+            )
         except Exception:
             pass
     if explicit:
@@ -37,7 +40,6 @@ def _detect_data_source() -> str:
     url = os.environ.get("KOBO_EXPORT_URL")
     if not url:
         try:
-            import streamlit as st
             url = st.secrets.get("KOBO_EXPORT_URL")
         except Exception:
             pass
@@ -50,6 +52,8 @@ def _detect_data_source() -> str:
 DATA_SOURCE = _detect_data_source()
 
 
+# Cache the raw load; ttl=300 means "refresh at most every 5 minutes".
+@st.cache_data(ttl=300, show_spinner="Loading submissions…")
 def load_data() -> pd.DataFrame:
     """Load submissions for now.
 
@@ -66,6 +70,8 @@ def load_data() -> pd.DataFrame:
     return pd.read_csv("data/synthetic_submissions.csv", dtype=object)
 
 
+# Cache the filtered/resolved dataframe, keyed on the kwargs.
+@st.cache_data(ttl=300, show_spinner="Filtering…")
 def get_filtered_dataframe(
     division=None,
     district=None,
@@ -73,11 +79,21 @@ def get_filtered_dataframe(
     period=None,
     basis="active",
 ) -> pd.DataFrame:
-    """Return the single filtered dataframe used by every page."""
+    """Return the single filtered dataframe used by every page.
+
+    Active: keep only the latest submission per facility, then resolve.
+    Cumulative: keep ALL submissions (history matters for "since
+    establishment" fields), then resolve.
+    """
     df = load_data()
-    df = select_latest_per_facility(df)
     df = add_division_columns(df)
+
+    # CHANGED: dedupe only for "active". Cumulative must see full history.
+    if basis == "active":
+        df = select_latest_per_facility(df)
+
     df = resolve_dataframe(df, basis=basis)
+
     if division is not None:
         df = df[df["division_mapped"] == division]
     if district is not None:

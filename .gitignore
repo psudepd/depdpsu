@@ -9,3 +9,7 @@ __pycache__/
 *.xlsx
 *.jpg
 !tests/expected_*.xlsx
+
+check_token.py
+pytest_*.txt
+.agents/

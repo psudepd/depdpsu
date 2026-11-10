@@ -1,15 +1,15 @@
-"""GIS map page.
+"""GIS map page — map, filters and headline reach only.
 
-Map + four panels:
-  (1) Headline: Direct, Estimated family, Estimated total
-  (2) Direct by service type: 18 cards
-  (3) Data received: reports, facilities, districts x/30, last submission,
-      source mix, latest 10 reports
-  (4) Filters above the map: service type, ownership class, region, district
+Page layout (in order):
+  1. Page title: "Geographic Coverage"
+  2. Filter bar: Service type, Ownership class, Region, District
+  3. Three headline KPI cards: Direct, Indirect (Estimated), Total reach
+  4. Folium map, full width, height=700
+  5. Optional collapsible "Submissions without coordinates" expander
 
-Boundary policy (interim): district polygon layers are deferred until a
-licensed ADM2 file is available. Pins render on OpenStreetMap only.
-No polygon geometry, no bbox filtering, no district containment checks.
+The 18-service cards grid, the "Data received" panel, the "Latest 10
+reports" table and any source-mix text are removed from this page.
+build_folium_map() and render_folium.py are not touched.
 """
 from __future__ import annotations
 
@@ -19,17 +19,13 @@ import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
 
-from src.export.exporters import footer_text
-from src.geo.boundaries import load_boundaries
-from src.geo.render_folium import build_folium_map, missing_boundaries_html
-from src.geo.render_static import render_static_jpg
-from src.kpi.aggregate import aggregate_reach, breakdown
+from src.geo.render_folium import build_folium_map
+from src.kpi.aggregate import aggregate_reach
 from src.kpi.geography import DIVISION_MAP
-from src.ui.components import kpi_card, table_with_downloads
-from src.ui.state import DATA_SOURCE, get_filtered_dataframe, load_data
+from src.ui.components import kpi_card
+from src.ui.state import DATA_SOURCE, load_data
 
 FAMILY_FACTOR = int(os.environ.get("FAMILY_FACTOR", "5"))
-DISTRICTS_TOTAL = 30
 
 # map.py is at repo/src/ui/pages/map.py — 4 dirname calls to reach repo root.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -76,22 +72,16 @@ def _ownership_by_type() -> dict:
         return dict(_OWNERSHIP_FALLBACK)
 
 
-def _render_map_or_fallback(df: pd.DataFrame):
-    # Boundary layers deferred. Pins on OpenStreetMap, no polygons.
+def _render_map(df: pd.DataFrame):
+    """Render the Folium map full-width with the missing-coordinates expander."""
     st.info(
         "Interactive map: facility pins on OpenStreetMap. "
         "District-level boundary shading is not enabled yet."
     )
-    fmap = build_folium_map(df, None)   # None forces the pin-only path
+    fmap = build_folium_map(df, None)  # None forces the pin-only path
     if fmap is None:
         st.info("Map unavailable.")
         return
-
-    markers = getattr(fmap, "_markers", [])
-    n = len(markers)
-    r = sum(1 for mk in markers if mk.get("location_source") in ("form", "form_outside_sindh"))
-    c = sum(1 for mk in markers if mk.get("location_source") == "district")
-    st.caption(f"Pins shown: {n} — {r} with real coordinates, {c} at district centroid fallback")
 
     st_folium(fmap, use_container_width=True, height=700, key="depd_map")
 
@@ -99,87 +89,21 @@ def _render_map_or_fallback(df: pd.DataFrame):
     if missing is not None and len(missing):
         with st.expander("Submissions without coordinates", expanded=False):
             st.dataframe(
-                missing.rename(columns={
-                    "facility_name": "Facility",
-                    "district": "District",
-                    "reason": "Reason",
-                }),
+                missing.rename(
+                    columns={
+                        "facility_name": "Facility",
+                        "district": "District",
+                        "reason": "Reason",
+                    }
+                ),
                 use_container_width=True,
                 hide_index=True,
             )
 
 
-def _headline_panel(df: pd.DataFrame):
-    r = aggregate_reach(df, family_factor=FAMILY_FACTOR)
-    kpi_card("Direct beneficiaries", f"{r['direct']:,.0f}",
-             "Facility-reported unique headcounts (resolved per Section 5.3).")
-    kpi_card("Estimated family (indirect)", f"{r['family']:,.0f}",
-             f"Estimated model: Direct × {FAMILY_FACTOR}. Not a count.")
-    kpi_card("Estimated total reach", f"{r['total']:,.0f}",
-             "Estimated total reach = Direct + family estimate.")
-
-
-def _service_cards(df: pd.DataFrame):
-    st.markdown("**Direct by service type (18)**")
-    bt = breakdown(df, "service")
-    types = [
-        "rcmhc", "rcph", "gov_se", "inclusive", "deaf_reach", "sipmr", "ipmr",
-        "carts", "nowpdp", "hostel", "vtc", "academy", "gia",
-        "sindh_persons_with_disabilitie", "dis_cer",
-        "legal_support__beneficiaries", "pcrdp", "assistive_ip",
-    ]
-    by_type = {}
-    if len(bt):
-        by_type = dict(zip(bt["group"].astype(str), bt["direct"]))
-    cols = st.columns(3)
-    for i, t in enumerate(types):
-        with cols[i % 3]:
-            val = by_type.get(t, 0.0)
-            status = "No reports" if val == 0 and t not in by_type else ""
-            kpi_card(t, f"{val:,.0f}" + ("" if status == "" else " · No reports"))
-
-
-def _data_received_panel(df: pd.DataFrame):
-    st.markdown("**Data received**")
-    r = aggregate_reach(df, family_factor=FAMILY_FACTOR)
-    kpi_card("Reports received", len(df))
-    kpi_card("Distinct facilities", df["facility_name"].nunique() if len(df) else 0)
-    d_rep = (
-        df[df["district"].notna() & (df["district"].astype(str).str.strip() != "")]
-        if len(df)
-        else df
-    )
-    kpi_card("Districts reporting", f"{d_rep['district'].nunique()}/{DISTRICTS_TOTAL}")
-    st.caption("Last submission time (Asia/Karachi)")
-    if len(df) and "_submission_time" in df.columns:
-        times = pd.to_datetime(df["_submission_time"], errors="coerce").dropna()
-        ts = times.max().strftime("%Y-%m-%d %H:%M") if len(times) else "—"
-        st.caption(ts)
-    else:
-        st.caption("—")
-    st.markdown("**Source mix**")
-    st.write(r.get("source_mix", {}) or "No data")
-    st.markdown("**Latest 10 reports**")
-    if len(df):
-        wanted = ["facility_name", "facility_type", "district", "rp_end",
-                  "_submission_time", "direct"]
-        present = [c for c in wanted if c in df.columns]
-        if "_submission_time" in df.columns:
-            latest = (
-                df.sort_values("_submission_time", ascending=False)
-                  [present]
-                  .head(10)
-            )
-        else:
-            latest = df[present].head(10)
-        table_with_downloads(latest, "Latest 10 reports", "map_latest_10")
-    else:
-        st.info("No reports in selection")
-
-
 def render(df: pd.DataFrame, basis: str = "active"):
-    """Render the GIS map page."""
-    st.title("DEPD Geographic Coverage")
+    """Render the GIS map page: title, filters, headline reach, map."""
+    st.title("Geographic Coverage")
     source_label = "LIVE" if DATA_SOURCE == "live" else "SYNTHETIC"
     st.caption(f"Data source: {source_label}")
     if DATA_SOURCE != "live":
@@ -187,12 +111,10 @@ def render(df: pd.DataFrame, basis: str = "active"):
             "SYNTHETIC TEST DATA — demonstrating the pipeline, not real figures."
         )
 
-    st.caption(f"Basis: {basis}")
-
+    # --- Filter bar (4 columns, deduped lists) ---
     ownership_by_type = _ownership_by_type()
     all_df = load_data()
 
-    # --- Filter options (deduplicated) ---
     services = ["All"] + sorted(all_df["facility_type"].dropna().unique().tolist())
     ownership_classes = ["All"] + sorted(set(ownership_by_type.values()))
     regions = ["All"] + sorted(set(DIVISION_MAP.values()))     # 6 divisions
@@ -222,16 +144,27 @@ def render(df: pd.DataFrame, basis: str = "active"):
     ) or "All Sindh"
     st.caption(f"Filters: {chip} · Basis: {basis}")
 
-    map_col, panel_col = st.columns([4, 2])
-    with map_col:
-        st.markdown("**Sindh facilities on OpenStreetMap**")
-        _render_map_or_fallback(fdf)
-    with panel_col:
-        st.markdown("### Headline")
-        _headline_panel(fdf)
-        st.markdown("---")
-        st.markdown("### Direct by service type")
-        _service_cards(fdf)
-        st.markdown("---")
-        st.markdown("### Data received")
-        _data_received_panel(fdf)
+    # --- Headline reach cards (single row, short labels, tooltips) ---
+    r = aggregate_reach(fdf, family_factor=FAMILY_FACTOR)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        kpi_card(
+            "Direct",
+            f"{r['direct']:,.0f}",
+            tooltip="Facility-reported unique headcounts. Resolved per Section 5.3; not deduplicated across facilities.",
+        )
+    with c2:
+        kpi_card(
+            "Indirect (Estimated)",
+            f"{r['family']:,.0f}",
+            tooltip="Estimated model: Direct × F (F=5 by default). Not a count.",
+        )
+    with c3:
+        kpi_card(
+            "Total reach",
+            f"{r['total']:,.0f}",
+            tooltip="Estimated total reach = Direct + indirect (Direct × (1+F)).",
+        )
+
+    # --- Map (full width) ---
+    _render_map(fdf)

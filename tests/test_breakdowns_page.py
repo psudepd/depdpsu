@@ -60,3 +60,38 @@ def test_breakdown_reconciles_cumulative_basis():
     assert _close(a, r), f"service {a} != reach {r}"
     assert _close(b, r), f"division {b} != reach {r}"
     assert _close(c, r), f"district {c} != reach {r}"
+
+
+import os
+
+import pandas as pd
+from src.ui.pages.breakdowns import (
+    _service_table,
+    _region_table,
+    _district_table,
+)
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+FIXTURE = os.path.join(ROOT, "tests", "expected_sample_107_rows.csv")
+
+
+def _df():
+    return pd.read_csv(FIXTURE, dtype=object)
+
+
+def test_service_table_reconciles():
+    df = _df()
+    tbl = _service_table(df)
+    # exclude the regional_dir row from the total
+    kept = tbl[~tbl["Service"].str.contains("regional_dir", case=False)]
+    assert abs(float(kept["Direct"].sum()) - float(aggregate_reach(df)["direct"])) < 0.1
+
+
+def test_region_table_has_six_rows():
+    tbl = _region_table(_df())
+    assert len(tbl) == 6
+
+
+def test_district_table_has_thirty_rows():
+    tbl = _district_table(_df())
+    assert len(tbl) == 30
