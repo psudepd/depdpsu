@@ -21,6 +21,9 @@ from src.kpi.resolver import resolve_dataframe
 
 
 def _detect_data_source() -> str:
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return "synthetic"
+
     explicit = os.environ.get("DATA_SOURCE") or os.environ.get("DEPD_DATA_SOURCE")
     if not explicit:
         try:

@@ -78,7 +78,7 @@ def _config(url=None, token=None):
 
 def fetch_bytes(url=None, token=None, timeout=120.0, retries=3, transport=None) -> bytes:
     url, token = _config(url, token)
-    headers = {'Authorization': f'Token {token}'} if token else {}
+    headers = {}
     last = None
     for attempt in range(retries):
         try:
