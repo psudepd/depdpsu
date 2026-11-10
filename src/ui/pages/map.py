@@ -86,7 +86,7 @@ def _render_map_or_fallback(df: pd.DataFrame):
     if fmap is None:
         st.info("Map unavailable.")
         return
-    st_folium(fmap, width=700, height=500, key="depd_map")
+    st_folium(fmap, use_container_width=True, height=700, key="depd_map")
 
     missing = getattr(fmap, "_missing_rows", None)
     if missing is not None and len(missing):
@@ -213,7 +213,7 @@ def render(df: pd.DataFrame, basis: str = "active"):
     ) or "All Sindh"
     st.caption(f"Filters: {chip} · Basis: {basis}")
 
-    map_col, panel_col = st.columns([3, 2])
+    map_col, panel_col = st.columns([4, 2])
     with map_col:
         st.markdown("**Sindh facilities on OpenStreetMap**")
         _render_map_or_fallback(fdf)
