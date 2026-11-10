@@ -10,17 +10,14 @@ from __future__ import annotations
 
 import os
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import pandas as pd
 
 from src.kpi.aggregate import select_latest_per_facility
 from src.kpi.geography import add_division_columns
 from src.kpi.resolver import resolve_dataframe
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
 
 
 def _detect_data_source() -> str:
