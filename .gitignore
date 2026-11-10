@@ -13,3 +13,5 @@ __pycache__/
 check_token.py
 pytest_*.txt
 .agents/
+
+!data/depd_form_latest.xlsx
