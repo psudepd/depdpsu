@@ -1,7 +1,7 @@
 """Executive Overview page — headline reach and service cards.
 
 Three tiers:
-  Row 1 — Current operations (Direct / Indirect reported / Waiting / Total reach)
+  Row 1 — Current operations (Direct / Indirect Estimated / Waiting / Total reach)
   Row 2 — Lifetime totals (Lifetime Direct / All reports combined / Submissions)
   Grid — 18 service cards with bucket badges
 """
@@ -67,6 +67,7 @@ def render(df: pd.DataFrame, basis: str = "active"):
     st.markdown("#### Current beneficiaries")
     st.caption(
         "Direct = active/current beneficiaries across 16 service types. "
+        "Indirect (Estimated) = Direct × F. "
         "Excludes lifetime totals and registration bodies."
     )
     c1, c2, c3, c4 = st.columns(4)
@@ -79,10 +80,13 @@ def render(df: pd.DataFrame, basis: str = "active"):
         )
     with c2:
         kpi_card(
-            "Indirect (reported)",
-            f"{totals['indirect_reported']:,.0f}",
-            tooltip="Facility-reported indirect reach (outreach / community). "
-                    "This is what the facility itself reported — not the ×F family estimate.",
+            "Indirect (Estimated)",
+            f"{totals['family_estimate']:,.0f}",
+            tooltip=(
+                f"Estimated model: Current Direct × F (F={FAMILY_FACTOR}). "
+                f"Not a count. Facility-reported indirect was "
+                f"{totals['indirect_reported']:,.0f}."
+            ),
         )
     with c3:
         kpi_card(

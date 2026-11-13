@@ -15,3 +15,5 @@ pytest_*.txt
 .agents/
 
 !data/depd_form_latest.xlsx
+
+.github/
