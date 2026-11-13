@@ -15,7 +15,9 @@ import os
 import pandas as pd
 import streamlit as st
 
-# CHANGED: _HERE is .../src/ui; two dirnames (not three) reach the repo root.
+from src.kpi.aggregate import LIFETIME_TOTALS, REGISTRATION_BODIES
+
+# _HERE is .../src/ui; two dirnames (not three) reach the repo root.
 _HERE = os.path.dirname(os.path.abspath(__file__))          # .../src/ui
 _SRC = os.path.dirname(_HERE)                               # .../src
 _REPO_ROOT = os.path.dirname(_SRC)                          # .../DEPD Dashboard Beneficiary
@@ -49,7 +51,6 @@ SERVICE_ORDER: list[tuple[str, list[str]]] = [
 ]
 
 
-# CHANGED: cache the two static CSV loads; they never change at runtime.
 @st.cache_data(show_spinner=False)
 def _load_labels() -> dict:
     """facility_type code -> human label from choices.csv."""
@@ -100,8 +101,8 @@ def render_service_card(code: str, subset: pd.DataFrame, factor: int) -> float:
     """Render one service card; returns its Direct value (0.0 if no reports).
 
     Card layout inside st.container(border=True):
-      a. coloured dot + human label (ownership colour from ownership_by_type.csv)
-      b. human label from choices.csv
+      a. coloured dot + human label
+      b. bucket badge (Lifetime / Registration) when applicable
       c. Direct and Indirect (Estimated) side by side
       d. Male / Female / Other from W-only rows, or "Gender not reported"
       e. number of reports
@@ -134,6 +135,15 @@ def render_service_card(code: str, subset: pd.DataFrame, factor: int) -> float:
             f"<b>{human_label}</b>",
             unsafe_allow_html=True,
         )
+
+        # Bucket badge: makes the tier visible inside the grid, not just in the headline.
+        if code in LIFETIME_TOTALS:
+            st.caption(":orange[**Lifetime total (since inception)**]")
+        elif code in REGISTRATION_BODIES:
+            st.caption(
+                ":grey[**Registration / administrative body — not a beneficiary count**]"
+            )
+
         if not has_reports:
             st.markdown(":grey[**Data not received**]")
             return 0.0

@@ -16,7 +16,12 @@ import os
 import pandas as pd
 import streamlit as st
 
-from src.kpi.aggregate import aggregate_reach, breakdown
+from src.kpi.aggregate import (
+    LIFETIME_TOTALS,
+    REGISTRATION_BODIES,
+    aggregate_reach,
+    breakdown,
+)
 from src.ui.components import table_with_downloads
 from src.ui.service_cards import SERVICE_ORDER
 
@@ -42,6 +47,15 @@ def _warn_invalid_cumulative(df: pd.DataFrame) -> None:
             f"implausible value(s) for {services}. "
             "Please review the source data in Kobo."
         )
+
+
+def _bucket_of(code: str) -> str:
+    """Classify a facility_type code: Current / Lifetime / Registration."""
+    if code in LIFETIME_TOTALS:
+        return "Lifetime"
+    if code in REGISTRATION_BODIES:
+        return "Registration"
+    return "Current"
 
 
 def _division_names() -> list[str]:
@@ -77,27 +91,48 @@ def _enrich(base: pd.DataFrame, key_col: str) -> pd.DataFrame:
 
 
 def _with_grand_total(tbl: pd.DataFrame, key_col: str, label: str = "Grand total"):
-    """Append a grand total row whose Direct equals the table Direct sum."""
-    total_direct = float(tbl["Direct"].sum())
+    """Append a grand total row.
+
+    When a Bucket column exists, the total is restricted to Current rows so
+    it reconciles with aggregate_reach()["direct"]. Lifetime and Registration
+    rows are visible in the table but excluded from the grand total.
+    """
+    if "Bucket" in tbl.columns:
+        current = tbl[tbl["Bucket"].astype(str) == "Current"]
+        total_direct = float(current["Direct"].sum())
+        total_reports = int(current["Reports"].sum())
+        total_new = float(current["New"].sum())
+        total_waiting = float(current["Waiting"].sum())
+    else:
+        total_direct = float(tbl["Direct"].sum())
+        total_reports = int(tbl["Reports"].sum())
+        total_new = float(tbl["New"].sum())
+        total_waiting = float(tbl["Waiting"].sum())
+
     gt = {
         key_col: label,
         "Status": "",
-        "Reports": int(tbl["Reports"].sum()),
+        "Reports": total_reports,
         "Direct": total_direct,
         "Indirect (Estimated)": total_direct * FAMILY_FACTOR,
         "Total reach (Estimated)": total_direct * (1 + FAMILY_FACTOR),
-        "New": float(tbl["New"].sum()),
-        "Waiting": float(tbl["Waiting"].sum()),
+        "New": total_new,
+        "Waiting": total_waiting,
         "Share of Direct (%)": 100.0 if total_direct > 0 else 0.0,
     }
+    if "Bucket" in tbl.columns:
+        gt["Bucket"] = "Current"
     return pd.concat([tbl, pd.DataFrame([gt])], ignore_index=True)
 
 
 def _service_table(df: pd.DataFrame) -> pd.DataFrame:
     """By service (as filed): one row per service plus a regional_dir row.
 
-    regional_dir is office information only: its Direct is 0 and it is not
-    added to any total. No grand total row here — render() appends it.
+    Uses the union of SERVICE_ORDER codes and whatever facility_type values
+    actually appear in df, so a new Kobo code is shown (Bucket = Current)
+    instead of being silently dropped by reindex(). regional_dir is office
+    information only: its Direct is 0 and it is not added to any total.
+    No grand total row here — render() appends it.
     """
     base = breakdown(df, "service")
     if len(base):
@@ -114,13 +149,24 @@ def _service_table(df: pd.DataFrame) -> pd.DataFrame:
         base = pd.DataFrame(
             columns=["Service", "Reports", "Direct", "New", "Waiting"]
         )
-    all_services = [code for _, codes in SERVICE_ORDER for code in codes]
+
+    # Union of known codes (SERVICE_ORDER) and codes actually present in the data.
+    known = [code for _, codes in SERVICE_ORDER for code in codes]
+    present = base["Service"].astype(str).tolist() if len(base) else []
+    all_services = list(dict.fromkeys(known + present))
+
     base = base.set_index("Service").reindex(all_services).reset_index()
     base["Service"] = base["Service"].astype(str)
     for c in NUMERIC_COLS:
         base[c] = pd.to_numeric(base[c], errors="coerce").fillna(0.0)
     base = _enrich(base, "Service")
+
+    # Bucket classification: Current / Lifetime / Registration
+    base["Bucket"] = base["Service"].apply(_bucket_of)
+
     # regional_dir row: office information only, Direct = 0, not counted.
+    # breakdown() excludes regional_dir at source, so this hardcoded row is
+    # consistent and cannot be double-counted.
     regional = pd.DataFrame(
         [
             {
@@ -133,6 +179,7 @@ def _service_table(df: pd.DataFrame) -> pd.DataFrame:
                 "Waiting": 0.0,
                 "Share of Direct (%)": 0.0,
                 "Status": "No reports",
+                "Bucket": "Registration",
             }
         ]
     )
@@ -194,7 +241,6 @@ def render(df: pd.DataFrame, basis: str = "active"):
     """Render the Breakdowns page."""
     st.title("Breakdowns")
 
-    # CHANGED: warn when cumulative is missing implausible rows.
     if basis == "cumulative":
         _warn_invalid_cumulative(df)
 
@@ -202,6 +248,11 @@ def render(df: pd.DataFrame, basis: str = "active"):
 
     # --- By service ---
     st.markdown("### By service (as filed)")
+    st.caption(
+        "Bucket = Current (active beneficiaries), Lifetime (since inception), "
+        "or Registration (administrative body, not a beneficiary count). "
+        "The grand total below the service table counts Current rows only."
+    )
     svc = _with_grand_total(_service_table(df), "Service")
     st.dataframe(svc, use_container_width=True, hide_index=True)
     table_with_downloads(svc, "Breakdown by service", "bd_service")
@@ -219,6 +270,6 @@ def render(df: pd.DataFrame, basis: str = "active"):
     table_with_downloads(dist, "Breakdown by district", "bd_district")
 
     st.caption(
-        f"Grand total (Direct): {grand_total:,.0f} — service, region and district "
-        "tables all reconcile to aggregate_reach()."
+        f"Grand total (Direct, current only): {grand_total:,.0f} — "
+        "service, region and district tables all reconcile to aggregate_reach()."
     )

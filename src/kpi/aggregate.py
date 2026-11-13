@@ -29,6 +29,12 @@ WAITING_FIELDS = ("w_waiting", "c_waiting", "n_waiting")
 
 SANITY_CEILING = 1_000_000
 
+# --- NEW: tier classification for the Executive page -------------------------
+# Lifetime-since-inception totals — never mixed into the "current" headline.
+LIFETIME_TOTALS = frozenset({"nowpdp", "dis_cer"})
+# Registration / administrative bodies — not beneficiary counts.
+REGISTRATION_BODIES = frozenset({"sindh_persons_with_disabilitie", "regional_dir"})
+
 # Fallback division mapping. Mirrors data/district_division.csv + divisions.csv
 # exactly. Used ONLY if the CSVs cannot be read at runtime (e.g., the deployed
 # bundle does not include data/). Prevents the app from silently returning
@@ -339,3 +345,110 @@ def apply_sanity_ceiling(df: pd.DataFrame, ceiling: float = SANITY_CEILING) -> p
             vals = pd.to_numeric(d[c], errors="coerce")
             d["implausible_value"] = d["implausible_value"] | (vals > ceiling)
     return d
+
+
+# ---------------------------------------------------------------------------
+# NEW: tiered totals for the Executive page and home strip
+# ---------------------------------------------------------------------------
+
+def _num_sum(series) -> float:
+    """Safe numeric sum that tolerates Nones and NaNs."""
+    return float(pd.to_numeric(series, errors="coerce").fillna(0.0).sum())
+
+
+def _bucket_of(code: str) -> str:
+    """Classify a facility_type code into Current / Lifetime / Registration."""
+    if code in LIFETIME_TOTALS:
+        return "Lifetime"
+    if code in REGISTRATION_BODIES:
+        return "Registration"
+    return "Current"
+
+
+def aggregate_totals(df: pd.DataFrame, family_factor: int = 5) -> dict:
+    """Tiered totals for the Executive page and home strip.
+
+    Returns:
+      current_direct       Direct for current (non-lifetime, non-registration) services
+      lifetime_direct      Direct for NOWPDP + Disability Certificates
+      lifetime_nowpdp      Direct for NOWPDP alone
+      lifetime_dis_cer     Direct for Disability Certificates alone
+      registration_direct  Direct for SPDPA + regional_dir (should be ~0)
+      combined_direct      current + lifetime (matches Dashboard!H24)
+      indirect_reported    Facility-reported indirect reach
+      waiting              Reported waiting-list total
+      family_estimate      current_direct * family_factor
+      total_reach_current  current_direct * (1 + family_factor)
+      n_reports_current    Submissions in the current bucket
+      n_reports_lifetime   Submissions in the lifetime bucket
+      invalid_rows         Rows flagged source == 'invalid_value'
+    """
+    empty = {
+        "current_direct": 0.0,
+        "lifetime_direct": 0.0,
+        "lifetime_nowpdp": 0.0,
+        "lifetime_dis_cer": 0.0,
+        "registration_direct": 0.0,
+        "combined_direct": 0.0,
+        "indirect_reported": 0.0,
+        "waiting": 0.0,
+        "family_estimate": 0.0,
+        "total_reach_current": 0.0,
+        "n_reports_current": 0,
+        "n_reports_lifetime": 0,
+        "invalid_rows": 0,
+    }
+    if df is None or len(df) == 0:
+        return empty
+
+    ft = df["facility_type"].astype(str)
+    is_lifetime = ft.isin(LIFETIME_TOTALS)
+    is_registration = ft.isin(REGISTRATION_BODIES)
+    is_current = ~is_lifetime & ~is_registration
+
+    direct_col = df["direct"] if "direct" in df.columns else pd.Series(0.0, index=df.index)
+
+    current_direct = _num_sum(direct_col[is_current])
+    lifetime_direct = _num_sum(direct_col[is_lifetime])
+    lifetime_nowpdp = _num_sum(direct_col[ft == "nowpdp"])
+    lifetime_dis_cer = _num_sum(direct_col[ft == "dis_cer"])
+    registration_direct = _num_sum(direct_col[is_registration])
+
+    # Reported indirect: try since-inception column first, else per-submission
+    indirect_reported = 0.0
+    for col in (
+        "Total_Indirect_Reach_ablishment_Indirect",
+        "Total_indirect_reach_since_inception",
+    ):
+        if col in df.columns:
+            indirect_reported = _num_sum(df[col])
+            if indirect_reported:
+                break
+
+    # Waiting: first available waiting column
+    waiting = 0.0
+    for col in ("c_waiting", "w_waiting", "waiting", "n_waiting"):
+        if col in df.columns:
+            waiting = _num_sum(df[col])
+            if waiting:
+                break
+
+    invalid_rows = 0
+    if "source" in df.columns:
+        invalid_rows = int((df["source"].astype(str) == "invalid_value").sum())
+
+    return {
+        "current_direct": current_direct,
+        "lifetime_direct": lifetime_direct,
+        "lifetime_nowpdp": lifetime_nowpdp,
+        "lifetime_dis_cer": lifetime_dis_cer,
+        "registration_direct": registration_direct,
+        "combined_direct": current_direct + lifetime_direct,
+        "indirect_reported": indirect_reported,
+        "waiting": waiting,
+        "family_estimate": current_direct * family_factor,
+        "total_reach_current": current_direct * (1 + family_factor),
+        "n_reports_current": int(is_current.sum()),
+        "n_reports_lifetime": int(is_lifetime.sum()),
+        "invalid_rows": invalid_rows,
+    }
