@@ -1,3 +1,11 @@
+---
+title: DEPD Dashboard
+sdk: streamlit
+sdk_version: 1.40.0
+app_file: app.py
+pinned: false
+---
+
 # DEPD Executive Analytics & GIS Dashboard: project folder
 
 Government of Sindh, Department of Empowerment of Persons with Disabilities (DEPD).
