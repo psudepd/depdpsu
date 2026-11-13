@@ -10,6 +10,7 @@ from src.kpi.aggregate import aggregate_totals
 from src.kpi.geography import add_division_columns
 from src.ui.pages.executive import render as render_executive
 from src.ui.pages.breakdowns import render as render_breakdowns
+from src.ui.pages.summary import render as render_summary
 from src.ui.pages.map import render as render_map
 
 FAMILY_FACTOR = int(os.environ.get("FAMILY_FACTOR", "5"))
@@ -22,8 +23,11 @@ if DATA_SOURCE == "live":
 else:
     st.caption("Data source: SYNTHETIC · demonstrating the pipeline, not real figures")
 
-# Sidebar navigation (stub — only the Executive page is implemented for now)
-page = st.sidebar.radio("Page", ["Executive Overview", "Breakdowns", "Map"])
+# Sidebar navigation
+page = st.sidebar.radio(
+    "Page",
+    ["Executive Overview", "Breakdowns", "Service summaries", "Map"],
+)
 
 # Role stub (Phase 6 will replace with real auth)
 role = st.sidebar.selectbox("Role", ["viewer", "admin"])
@@ -57,7 +61,6 @@ except Exception:
 
 
 # --- Build dropdown option lists -----------------------------------------
-# Division: prefer the mapped display name so it matches get_filtered_dataframe
 if "division_mapped" in all_df_enriched.columns:
     _division_values = (
         all_df_enriched["division_mapped"]
@@ -78,7 +81,6 @@ else:
     )
 divisions = ["All"] + sorted(_division_values)
 
-# District: show display name, filter on code
 _district_codes = (
     all_df_enriched.get("district", pd.Series(dtype=str))
     .dropna()
@@ -95,7 +97,6 @@ district_labels = ["All"] + [label for label, _ in _district_pairs]
 _label_to_code = {label: code for label, code in _district_pairs}
 _label_to_code["All"] = "All"
 
-# Service
 services = ["All"] + sorted(
     all_df_enriched.get("facility_type", pd.Series(dtype=str))
     .dropna()
@@ -122,7 +123,6 @@ if service != "All":
 
 df = get_filtered_dataframe(basis=basis, **filters)
 
-# Show active filter chips
 chip_text = " · ".join(f"{k}={v}" for k, v in filters.items()) or "All Sindh"
 st.caption(f"Filters: {chip_text} · Basis: {basis}")
 
@@ -149,5 +149,7 @@ if page == "Executive Overview":
     render_executive(df, basis)
 elif page == "Breakdowns":
     render_breakdowns(df, basis)
+elif page == "Service summaries":
+    render_summary(df, basis)
 elif page == "Map":
     render_map(df, basis)
